@@ -1,0 +1,89 @@
+name: Build Shanty Tail and Teeth EQ Installers
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Windows (x64 VST3 + Setup.exe)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Ensure JUCE is present
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "JUCE/CMakeLists.txt")) {
+            git clone --depth 1 --branch 9.0.6 https://github.com/juce-framework/JUCE.git JUCE
+          }
+
+      - name: Configure CMake
+        run: cmake -B build-win -S . -A x64 -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build VST3 and Standalone
+        run: cmake --build build-win --config Release --target ShantyTailAndTeethEQ_VST3 ShantyTailAndTeethEQ_Standalone --parallel
+
+      - name: Build Windows Installer (Inno Setup)
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            $innoPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+            if (-not (Test-Path $innoPath)) {
+              choco install innosetup -y
+            }
+          }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          if (Get-Command iscc -ErrorAction SilentlyContinue) {
+            iscc windows/installer_windows.iss
+          } else {
+            & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" windows/installer_windows.iss
+          }
+
+      - name: Upload Windows Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShantyTailAndTeethEQ-Windows-Installer
+          path: dist/ShantyTailAndTeethEQ-1.0.0-Windows-Setup.exe
+
+  build-macos:
+    name: macOS Universal (VST3 + AU + .pkg)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Ensure JUCE is present
+        run: |
+          if [ ! -f "JUCE/CMakeLists.txt" ]; then
+            git clone --depth 1 --branch 9.0.6 https://github.com/juce-framework/JUCE.git JUCE
+          fi
+
+      - name: Configure CMake
+        run: cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build AU, VST3 and Standalone
+        run: cmake --build build --config Release --parallel
+
+      - name: Sign bundles and package macOS Universal .pkg
+        run: |
+          mkdir -p dist pkg_stage/vst3 pkg_stage/au
+          cp -R "build/ShantyTailAndTeethEQ_artefacts/Release/VST3/Shanty Tail and Teeth EQ.vst3" pkg_stage/vst3/
+          cp -R "build/ShantyTailAndTeethEQ_artefacts/Release/AU/Shanty Tail and Teeth EQ.component" pkg_stage/au/
+          codesign --force --deep --sign - "pkg_stage/vst3/Shanty Tail and Teeth EQ.vst3"
+          codesign --force --deep --sign - "pkg_stage/au/Shanty Tail and Teeth EQ.component"
+          pkgbuild --root pkg_stage/vst3 --identifier com.adamskymusic.shantytailteetheq.vst3 --version 1.0.0 --install-location /Library/Audio/Plug-Ins/VST3 pkg_stage/ShantyTailAndTeethEQ_VST3.pkg
+          pkgbuild --root pkg_stage/au --identifier com.adamskymusic.shantytailteetheq.au --version 1.0.0 --install-location /Library/Audio/Plug-Ins/Components pkg_stage/ShantyTailAndTeethEQ_AU.pkg
+          productbuild --package pkg_stage/ShantyTailAndTeethEQ_VST3.pkg --package pkg_stage/ShantyTailAndTeethEQ_AU.pkg dist/ShantyTailAndTeethEQ-1.0.0-macOS-Universal.pkg
+
+      - name: Upload macOS Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShantyTailAndTeethEQ-macOS-Installer
+          path: dist/ShantyTailAndTeethEQ-1.0.0-macOS-Universal.pkg

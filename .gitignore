@@ -1,0 +1,7 @@
+build/
+build-local/
+build-win/
+dist/
+pkg_stage/
+JUCE
+.DS_Store
