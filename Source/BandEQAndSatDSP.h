@@ -264,8 +264,8 @@ public:
         if (type == SatType::Off || driveNorm <= 0.001f)
             return x;
 
-        // Map driveNorm (0..1) to musical gain
-        const float driveGain = 1.0f + driveNorm * 9.0f;
+        // Map driveNorm (0..1) to musical gain (enough bite even on -18 dBFS band slices)
+        const float driveGain = 1.0f + driveNorm * 22.0f;
         const float in = x * driveGain;
         float shaped = in;
 

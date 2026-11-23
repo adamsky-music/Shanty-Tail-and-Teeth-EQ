@@ -83,7 +83,7 @@ public:
 
     static constexpr int getLatencySamples() noexcept
     {
-        return fftSize - hopSize;
+        return fftSize;
     }
 
     // Processes stereo input (inL, inR) and writes separated stereo buses:
@@ -153,47 +153,47 @@ private:
         switch (params.source)
         {
             case SourceType::Drums:
-                floorAttackCoeff  = tauToCoeff(0.065f);
-                floorReleaseCoeff = tauToCoeff(0.035f);
-                fluxBias = 1.15f;
-                hfWeight = 1.10f;
+                floorAttackCoeff  = tauToCoeff(0.280f);
+                floorReleaseCoeff = tauToCoeff(0.060f);
+                fluxBias = 1.00f;
+                hfWeight = 1.15f;
                 break;
             case SourceType::Bass:
-                floorAttackCoeff  = tauToCoeff(0.090f);
-                floorReleaseCoeff = tauToCoeff(0.055f);
+                floorAttackCoeff  = tauToCoeff(0.320f);
+                floorReleaseCoeff = tauToCoeff(0.080f);
                 fluxBias = 1.00f;
                 hfWeight = 0.90f;
                 break;
             case SourceType::Vocal:
-                floorAttackCoeff  = tauToCoeff(0.055f);
-                floorReleaseCoeff = tauToCoeff(0.030f);
-                fluxBias = 1.05f;
-                hfWeight = 1.15f;
+                floorAttackCoeff  = tauToCoeff(0.220f);
+                floorReleaseCoeff = tauToCoeff(0.050f);
+                fluxBias = 1.00f;
+                hfWeight = 1.20f;
                 break;
             case SourceType::Guitar:
-                floorAttackCoeff  = tauToCoeff(0.070f);
-                floorReleaseCoeff = tauToCoeff(0.040f);
-                fluxBias = 1.10f;
-                hfWeight = 1.05f;
+                floorAttackCoeff  = tauToCoeff(0.250f);
+                floorReleaseCoeff = tauToCoeff(0.065f);
+                fluxBias = 1.00f;
+                hfWeight = 1.10f;
                 break;
             case SourceType::Keys:
-                floorAttackCoeff  = tauToCoeff(0.085f);
-                floorReleaseCoeff = tauToCoeff(0.050f);
-                fluxBias = 1.02f;
+                floorAttackCoeff  = tauToCoeff(0.300f);
+                floorReleaseCoeff = tauToCoeff(0.075f);
+                fluxBias = 1.00f;
                 hfWeight = 1.00f;
                 break;
             case SourceType::Mix:
-                floorAttackCoeff  = tauToCoeff(0.075f);
-                floorReleaseCoeff = tauToCoeff(0.045f);
-                fluxBias = 1.08f;
-                hfWeight = 1.05f;
+                floorAttackCoeff  = tauToCoeff(0.260f);
+                floorReleaseCoeff = tauToCoeff(0.065f);
+                fluxBias = 1.00f;
+                hfWeight = 1.08f;
                 break;
             case SourceType::Default:
             default:
-                floorAttackCoeff  = tauToCoeff(0.070f);
-                floorReleaseCoeff = tauToCoeff(0.040f);
-                fluxBias = 1.08f;
-                hfWeight = 1.00f;
+                floorAttackCoeff  = tauToCoeff(0.260f);
+                floorReleaseCoeff = tauToCoeff(0.065f);
+                fluxBias = 1.00f;
+                hfWeight = 1.05f;
                 break;
         }
     }
@@ -216,11 +216,11 @@ private:
         float floorAtk = 0.85f, floorRel = 0.70f, fluxBias = 1.08f, hfWeight = 1.0f;
         getSourceConstants(params, floorAtk, floorRel, fluxBias, hfWeight);
 
-        // Separation maps 0..1 to contrast/slope & threshold
+        // Separation maps 0..1 to contrast/slope & threshold (0 -> strict peaks only, 1 -> sensitive)
         const float sep = juce::jlimit(0.0f, 1.0f, params.separation);
-        const float threshold = juce::jmap(sep, 0.0f, 1.0f, 0.42f, 0.08f);
-        const float sharpness = juce::jmap(sep, 0.0f, 1.0f, 1.6f, 5.5f);
-        const float decayCoeff = juce::jmap(juce::jlimit(0.0f, 1.0f, params.decay), 0.0f, 1.0f, 0.15f, 0.88f);
+        const float threshold = juce::jmap(sep, 0.0f, 1.0f, 0.55f, 0.06f);
+        const float contrast  = juce::jmap(sep, 0.0f, 1.0f, 2.20f, 0.75f);
+        const float decayCoeff = juce::jmap(juce::jlimit(0.0f, 1.0f, params.decay), 0.0f, 1.0f, 0.05f, 0.85f);
 
         constexpr float eps = 1.0e-7f;
 
@@ -245,12 +245,16 @@ private:
             const float normBin = static_cast<float>(k) / static_cast<float>(numBins - 1);
             const float binWeight = 1.0f + (hfWeight - 1.0f) * normBin;
 
-            const float excess = juce::jmax(0.0f, mag - floorVal * (1.0f / fluxBias));
-            const float ratio = (excess / (mag + eps)) * binWeight;
+            const float excess = juce::jmax(0.0f, mag - floorVal);
+            const float ratio = juce::jlimit(0.0f, 1.0f, (excess / (mag + eps)) * binWeight);
 
-            // Soft sigmoid mapping around threshold
-            const float x = (ratio - threshold) * sharpness;
-            const float m = 1.0f / (1.0f + std::exp(-x));
+            // Zero-leakage thresholded mapping: steady tones (ratio <= threshold) stay 100% in Tail
+            float m = 0.0f;
+            if (ratio > threshold)
+            {
+                const float norm = (ratio - threshold) / juce::jmax(0.05f, 1.0f - threshold);
+                m = std::pow(juce::jlimit(0.0f, 1.0f, norm), contrast);
+            }
             rawMask[static_cast<size_t>(k)] = m;
         }
 
