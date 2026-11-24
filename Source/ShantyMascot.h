@@ -27,6 +27,15 @@ public:
         currentSat   = juce::jlimit(0.0f, 1.0f, juce::jmax(teethSat, tailSat));
         animTimeSec += 1.0f / 60.0f;
 
+        // Snappy ear-twitch envelope driven by Teeth transients
+        if (currentTeeth > earEnv)
+            earEnv = 0.45f * earEnv + 0.55f * currentTeeth;
+        else
+            earEnv *= 0.84f;
+
+        // Smooth saturation bite glow envelope
+        satEnv = 0.82f * satEnv + 0.18f * currentSat;
+
         lickTimer -= 1.0f / 60.0f;
         if (lickTimer <= 0.0f)
         {
@@ -113,13 +122,14 @@ public:
                                               drawArea.getCentreY() - destH * 0.5f,
                                               destW, destH);
 
-        // Stage glow reacting to Tail (cyan) + Teeth (red)
+        // Stage glow reacting to Tail (cyan), Teeth (red), and Saturation (amber)
         {
             const float bgCx = destRect.getCentreX();
             const float bgCy = destRect.getCentreY() + destRect.getHeight() * 0.04f;
             const float bgR  = destRect.getWidth() * 0.56f;
-            const auto glowCol = Palette::tailCyan.interpolatedWith(Palette::teethRed, juce::jlimit(0.0f, 1.0f, currentTeeth * 1.3f))
-                                                  .withAlpha(0.14f + 0.25f * juce::jmax(currentTeeth, currentTail));
+            auto glowCol = Palette::tailCyan.interpolatedWith(Palette::teethRed, juce::jlimit(0.0f, 1.0f, earEnv * 1.3f));
+            glowCol = glowCol.interpolatedWith(Palette::satAmber, juce::jlimit(0.0f, 1.0f, satEnv * 1.2f));
+            glowCol = glowCol.withAlpha(0.14f + 0.28f * juce::jmax(earEnv, juce::jmax(currentTail, satEnv)));
             juce::ColourGradient stageGlow(glowCol, bgCx, bgCy,
                                            juce::Colours::transparentBlack, bgCx + bgR, bgCy, true);
             g.setGradientFill(stageGlow);
@@ -156,20 +166,33 @@ public:
             g.drawImage(tailFrame, destRect);
         }
 
-        // Subtle squash on Teeth (Transient) hits
-        const float bounce = currentTeeth * 0.8f;
+        // Subtle alert lean on Teeth (Transient) hits
+        const float bounce = earEnv * 0.75f;
         const float groundX = destRect.getCentreX();
         const float groundY = destRect.getBottom() - destRect.getHeight() * 0.13f;
-        const auto beatTransform = juce::AffineTransform::scale(1.0f + 0.015f * bounce,
-                                                                1.0f - 0.022f * bounce,
+        const auto beatTransform = juce::AffineTransform::scale(1.0f + 0.014f * bounce,
+                                                                1.0f - 0.020f * bounce,
                                                                 groundX, groundY)
-                                       .translated(0.0f, bounce * 1.5f);
+                                       .translated(0.0f, bounce * 1.4f);
 
         juce::Graphics::ScopedSaveState bodyScope(g);
         g.addTransform(beatTransform);
 
         // 2. Seated Shanti body
         g.drawImage(bodyFrame, destRect);
+
+        // 2b. Audio-reactive perking/twitching ears on Teeth transients
+        if (earsFrame.isValid())
+        {
+            const float earAngle = -0.095f * earEnv + std::sin(animTimeSec * 22.0f) * (0.025f * earEnv);
+            const float earPivotX = destRect.getX() + 0.655f * destRect.getWidth();
+            const float earPivotY = destRect.getY() + 0.160f * destRect.getHeight();
+
+            juce::Graphics::ScopedSaveState earScope(g);
+            g.addTransform(juce::AffineTransform::rotation(earAngle, earPivotX, earPivotY)
+                               .translated(0.0f, -1.6f * earEnv));
+            g.drawImage(earsFrame, destRect);
+        }
 
         // 3. Tongue lick
         const float lickEnv = (lickProgress > 0.0f)
@@ -199,7 +222,7 @@ public:
             g.strokePath(tongue, juce::PathStrokeType(1.0f));
         }
 
-        // 4. Happy eyes when petted
+        // 4. Eyes: Happy "^ ^" when petted, OR sly/fierce focused brow + amber glint when Saturation bites!
         if (isHappy)
         {
             const float happyAlpha = juce::jmin(1.0f, petHappyTimer * 1.5f);
@@ -219,6 +242,34 @@ public:
             const float eyeR = destRect.getWidth() * 0.014f;
             drawHappyEye(0.663f, 0.193f, eyeR);
             drawHappyEye(0.742f, 0.184f, eyeR * 0.85f);
+        }
+        else if (satEnv > 0.06f)
+        {
+            const float biteAlpha = juce::jlimit(0.0f, 1.0f, satEnv * 1.4f);
+            auto drawBiteBrow = [&](float cxNorm, float cyNorm, float rx, float tilt) {
+                const float cx = destRect.getX() + cxNorm * destRect.getWidth();
+                const float cy = destRect.getY() + cyNorm * destRect.getHeight();
+                // Subtle fierce squint brow
+                g.setColour(juce::Colour(0xFF1D2025).withAlpha(0.85f * biteAlpha));
+                g.drawLine(cx - rx * 1.1f, cy - rx * (0.8f - tilt), cx + rx * 1.1f, cy - rx * (0.8f + tilt), 1.8f);
+                // Warm amber eye glint
+                g.setColour(Palette::satAmber.withAlpha(0.75f * biteAlpha));
+                g.fillEllipse(cx - rx * 0.35f, cy - rx * 0.35f, rx * 0.7f, rx * 0.7f);
+            };
+            const float eyeR = destRect.getWidth() * 0.014f;
+            drawBiteBrow(0.663f, 0.193f, eyeR, 0.35f);
+            drawBiteBrow(0.742f, 0.184f, eyeR * 0.85f, 0.35f);
+
+            // Subtle amber "bite" sparks near snout
+            for (int i = 0; i < 3; ++i)
+            {
+                const float phase = animTimeSec * 9.0f + static_cast<float>(i) * 2.1f;
+                const float sx = destRect.getX() + (0.78f + 0.04f * std::sin(phase)) * destRect.getWidth();
+                const float sy = destRect.getY() + (0.26f + 0.03f * std::cos(phase * 1.3f)) * destRect.getHeight();
+                const float sr = (1.6f + 1.4f * std::abs(std::sin(phase))) * biteAlpha;
+                g.setColour(Palette::satAmber.withAlpha(0.8f * biteAlpha));
+                g.fillEllipse(sx - sr, sy - sr, sr * 2.0f, sr * 2.0f);
+            }
         }
 
         // 5. Floating hearts
@@ -240,14 +291,14 @@ public:
         }
 
         // 6. Collar glow in sync with Teeth & Saturation Bite
-        const float collarIntensity = juce::jlimit(0.0f, 1.0f, currentTeeth * 0.85f + currentSat * 0.65f);
+        const float collarIntensity = juce::jlimit(0.0f, 1.0f, earEnv * 0.85f + satEnv * 0.70f);
         if (collarIntensity > 0.02f && collarGlowImage.isValid())
         {
             const float cx = destRect.getX() + collarNormCenter.x * destRect.getWidth();
             const float cy = destRect.getY() + collarNormCenter.y * destRect.getHeight();
             const float haloRadius = destRect.getWidth() * (0.14f + 0.09f * collarIntensity);
 
-            const auto haloCol = Palette::teethRed.interpolatedWith(Palette::satAmber, currentSat);
+            const auto haloCol = Palette::teethRed.interpolatedWith(Palette::satAmber, satEnv);
             juce::ColourGradient halo(haloCol.withAlpha(0.72f * collarIntensity), cx, cy,
                                       juce::Colours::transparentBlack, cx + haloRadius, cy, true);
             g.setGradientFill(halo);
@@ -267,12 +318,15 @@ private:
 
     juce::Image bodyFrame;
     juce::Image tailFrame;
+    juce::Image earsFrame;
     juce::Image collarGlowImage;
     juce::Point<float> collarNormCenter { 0.63f, 0.35f };
 
     float currentTeeth = 0.0f;
     float currentTail  = 0.0f;
     float currentSat   = 0.0f;
+    float earEnv       = 0.0f;
+    float satEnv       = 0.0f;
     float animTimeSec  = 0.0f;
 
     float lickTimer = 1.2f;
@@ -395,15 +449,20 @@ private:
 
         bodyFrame = juce::Image(juce::Image::ARGB, w, h, true);
         tailFrame = juce::Image(juce::Image::ARGB, w, h, true);
+        earsFrame = juce::Image(juce::Image::ARGB, w, h, true);
         collarGlowImage = juce::Image(juce::Image::ARGB, w, h, true);
 
         juce::Image::BitmapData srcData(fullSit, juce::Image::BitmapData::readOnly);
         juce::Image::BitmapData bodyData(bodyFrame, juce::Image::BitmapData::writeOnly);
         juce::Image::BitmapData tailData(tailFrame, juce::Image::BitmapData::writeOnly);
+        juce::Image::BitmapData earsData(earsFrame, juce::Image::BitmapData::writeOnly);
         juce::Image::BitmapData glowData(collarGlowImage, juce::Image::BitmapData::writeOnly);
 
         const int tailCutX = static_cast<int>(w * 0.305f);
         const int tailCutY = static_cast<int>(h * 0.500f);
+        const int earMinX  = static_cast<int>(w * 0.560f);
+        const int earMaxX  = static_cast<int>(w * 0.780f);
+        const int earMaxY  = static_cast<int>(h * 0.160f);
 
         double sumX = 0.0, sumY = 0.0;
         int count = 0;
@@ -420,6 +479,8 @@ private:
 
                 if (x < tailCutX && y > tailCutY)
                     tailData.setPixelColour(x, y, c);
+                else if (x >= earMinX && x <= earMaxX && y < earMaxY)
+                    earsData.setPixelColour(x, y, c);
                 else
                     bodyData.setPixelColour(x, y, c);
 
