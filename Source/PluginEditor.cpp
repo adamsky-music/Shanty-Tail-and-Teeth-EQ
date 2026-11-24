@@ -7,6 +7,8 @@ ShantyTailAndTeethEQEditor::ShantyTailAndTeethEQEditor(ShantyTailAndTeethEQProce
       spectrum(p)
 {
     setLookAndFeel(&lnf);
+    setResizable(true, true);
+    setResizeLimits(880, 560, 1920, 1200);
     setSize(1080, 660);
 
     adamskyLogo = juce::ImageCache::getFromMemory(BinaryData::adamsky_logo_png,
@@ -206,7 +208,10 @@ void ShantyTailAndTeethEQEditor::selectBand(int bandIndex)
 void ShantyTailAndTeethEQEditor::timerCallback()
 {
     spectrum.updateSpectra();
-    const bool isSleeping = bypassBtn.getToggleState() || (mixSlider.getValue() < 0.5);
+    const uint32_t nowMs  = juce::Time::getMillisecondCounter();
+    const uint32_t lastMs = processor.lastProcessMs.load(std::memory_order_relaxed);
+    const bool dawBypassed = (lastMs != 0 && (nowMs - lastMs) > 350);
+    const bool isSleeping  = bypassBtn.getToggleState() || (mixSlider.getValue() < 0.5) || dawBypassed;
     mascot.updateAnimation(processor.teethMeter.load(std::memory_order_relaxed),
                            processor.tailMeter.load(std::memory_order_relaxed),
                            processor.teethSatMeter.load(std::memory_order_relaxed),
@@ -240,26 +245,33 @@ void ShantyTailAndTeethEQEditor::paint(juce::Graphics& g)
     g.setFont(11.0f);
     g.drawText(juce::String::fromUTF8("ADAMSKY MUSIC  \xe2\x80\xa2  STRUCTURAL SPLIT & SATURATION"), titleX, 41, 300, 16, juce::Justification::centredLeft);
 
+    const float midH = static_cast<float>(juce::jmax(220, getHeight() - 304));
+    const float bottomY = 80.0f + midH + 10.0f;
+
     // Right Shanty Panel background
-    const auto rightPanel = juce::Rectangle<float>(static_cast<float>(getWidth() - 252), 80.0f, 240.0f, 356.0f);
+    const auto rightPanel = juce::Rectangle<float>(static_cast<float>(getWidth() - 252), 80.0f, 240.0f, midH);
     g.setColour(ShantyEQ::Palette::bgPanel);
     g.fillRoundedRectangle(rightPanel, 8.0f);
     g.setColour(ShantyEQ::Palette::borderSubtle);
     g.drawRoundedRectangle(rightPanel, 8.0f, 1.0f);
 
     // Bottom Inspector Panel background
-    const auto bottomPanel = juce::Rectangle<float>(12.0f, 446.0f, static_cast<float>(getWidth() - 24), 202.0f);
+    const auto bottomPanel = juce::Rectangle<float>(12.0f, bottomY, static_cast<float>(getWidth() - 24), 202.0f);
     g.setColour(ShantyEQ::Palette::bgPanel);
     g.fillRoundedRectangle(bottomPanel, 8.0f);
     g.setColour(ShantyEQ::Palette::borderSubtle);
     g.drawRoundedRectangle(bottomPanel, 8.0f, 1.0f);
 
     // Inspector sub-cards: Band Shape | TEETH (Transient) | TAIL (Tonal)
-    const float cardY = 486.0f;
+    const float cardY = bottomY + 40.0f;
     const float cardH = 150.0f;
-    const float card1W = 260.0f;
-    const float card2W = 365.0f;
-    const float card3W = 365.0f;
+    const float totalCardsW = static_cast<float>(getWidth() - 48 - 24);
+    const float card1W = totalCardsW * 0.26f;
+    const float card2W = totalCardsW * 0.37f;
+    const float card3W = totalCardsW * 0.37f;
+    const float c1X = 24.0f;
+    const float c2X = c1X + card1W + 12.0f;
+    const float c3X = c2X + card2W + 12.0f;
 
     auto drawCard = [&](float x, float w, const juce::String& title, juce::Colour accent)
     {
@@ -270,39 +282,45 @@ void ShantyTailAndTeethEQEditor::paint(juce::Graphics& g)
         g.drawRoundedRectangle(r, 6.0f, 1.0f);
 
         g.setColour(accent);
-        g.setFont(juce::Font(11.5f, juce::Font::bold));
+        g.setFont(juce::FontOptions(11.5f, juce::Font::bold));
         g.drawText(title, static_cast<int>(x + 12), static_cast<int>(cardY + 6), static_cast<int>(w - 24), 18, juce::Justification::centredLeft);
     };
 
-    drawCard(24.0f,  card1W, "BAND SHAPE", ShantyEQ::Palette::textSecondary);
-    drawCard(296.0f, card2W, "TEETH  (TRANSIENT)", ShantyEQ::Palette::teethRed);
-    drawCard(673.0f, card3W, "TAIL  (TONAL)", ShantyEQ::Palette::tailCyan);
+    drawCard(c1X, card1W, "BAND SHAPE", ShantyEQ::Palette::textSecondary);
+    drawCard(c2X, card2W, "TEETH  (TRANSIENT)", ShantyEQ::Palette::teethRed);
+    drawCard(c3X, card3W, "TAIL  (TONAL)", ShantyEQ::Palette::tailCyan);
 }
 
 void ShantyTailAndTeethEQEditor::resized()
 {
+    const int w = getWidth();
+    const int midH = juce::jmax(220, getHeight() - 304);
+    const int bottomY = 80 + midH + 10;
+
     // Header Split Engine controls
-    sourceLabel.setBounds(375, 14, 96, 14);
-    sourceCombo.setBounds(375, 31, 96, 26);
+    const int headerRightX = w - 376;
+    sourceLabel.setBounds(juce::jmin(375, headerRightX - 330), 14, 96, 14);
+    sourceCombo.setBounds(juce::jmin(375, headerRightX - 330), 31, 96, 26);
 
     auto placeTopKnob = [](juce::Slider& s, juce::Label& l, int x)
     {
-        l.setBounds(x, 11, 66, 13);
-        s.setBounds(x, 22, 66, 46);
+        l.setBounds(x, 11, 64, 13);
+        s.setBounds(x, 22, 64, 46);
     };
-    placeTopKnob(sepSlider, sepLabel, 482);
-    placeTopKnob(smoothSlider, smoothLabel, 554);
-    placeTopKnob(decaySlider, decayLabel, 626);
+    const int knobStartX = sourceCombo.getRight() + 10;
+    placeTopKnob(sepSlider, sepLabel, knobStartX);
+    placeTopKnob(smoothSlider, smoothLabel, knobStartX + 68);
+    placeTopKnob(decaySlider, decayLabel, knobStartX + 136);
 
-    // Header right buttons
-    teethSoloBtn.setBounds(704, 24, 86, 30);
-    tailSoloBtn.setBounds(795, 24, 80, 30);
-    msBtn.setBounds(880, 24, 48, 30);
-    bypassBtn.setBounds(933, 24, 82, 30);
-    manualBtn.setBounds(1020, 24, 34, 30);
+    // Header right buttons (anchored to right edge)
+    manualBtn.setBounds(w - 54, 24, 34, 30);
+    bypassBtn.setBounds(w - 140, 24, 80, 30);
+    msBtn.setBounds(w - 192, 24, 46, 30);
+    tailSoloBtn.setBounds(w - 276, 24, 78, 30);
+    teethSoloBtn.setBounds(w - 366, 24, 84, 30);
 
-    // Spectrum Analyzer (left-center)
-    spectrum.setBounds(12, 80, getWidth() - 274, 356);
+    // Spectrum Analyzer (left-center, stretches with window!)
+    spectrum.setBounds(12, 80, w - 274, midH);
 
     // Floating Edit Target pills inside top-left of Spectrum
     editTeethBtn.setBounds(24, 90, 62, 22);
@@ -310,60 +328,71 @@ void ShantyTailAndTeethEQEditor::resized()
     editBothBtn.setBounds(150, 90, 58, 22);
 
     // Right Panel: Shanty Mascot + Global Bus Knobs
-    const int rightX = getWidth() - 252;
-    mascot.setBounds(rightX + 14, 86, 212, 186);
+    const int rightX = w - 252;
+    const int mascotH = juce::jmax(110, midH - 170);
+    mascot.setBounds(rightX + 14, 86, 212, mascotH);
 
+    const int globalY = 86 + mascotH + 4;
     auto placeGlobalKnob = [](juce::Slider& s, juce::Label& l, int x, int y)
     {
         l.setBounds(x, y, 100, 14);
-        s.setBounds(x + 12, y + 14, 76, 62);
+        s.setBounds(x + 12, y + 14, 76, 60);
     };
-    placeGlobalKnob(teethLevelSlider, teethLevelLabel, rightX + 14,  274);
-    placeGlobalKnob(tailLevelSlider,  tailLevelLabel,  rightX + 126, 274);
-    placeGlobalKnob(mixSlider,        mixLabel,        rightX + 14,  354);
-    placeGlobalKnob(outputSlider,     outputLabel,     rightX + 126, 354);
+    placeGlobalKnob(teethLevelSlider, teethLevelLabel, rightX + 14,  globalY);
+    placeGlobalKnob(tailLevelSlider,  tailLevelLabel,  rightX + 126, globalY);
+    placeGlobalKnob(mixSlider,        mixLabel,        rightX + 14,  globalY + 78);
+    placeGlobalKnob(outputSlider,     outputLabel,     rightX + 126, globalY + 78);
 
     // Bottom Inspector: Band Buttons
-    const int btnW = (getWidth() - 48 - 7 * 6) / ShantyEQ::numBands;
+    const int btnW = (w - 48 - 7 * 6) / ShantyEQ::numBands;
     for (int i = 0; i < ShantyEQ::numBands; ++i)
-        bandButtons[static_cast<size_t>(i)].setBounds(24 + i * (btnW + 6), 454, btnW, 24);
+        bandButtons[static_cast<size_t>(i)].setBounds(24 + i * (btnW + 6), bottomY + 8, btnW, 24);
 
-    // Card 1: Band Shape (x=24..284, y=486..636)
-    bandEnabledBtn.setBounds(185, 490, 90, 22);
-    bandTypeLabel.setBounds(36, 518, 86, 14);
-    bandTypeCombo.setBounds(36, 536, 94, 26);
+    // Bottom Inspector Cards (proportional)
+    const int cardY = bottomY + 40;
+    const int totalCardsW = w - 48 - 24;
+    const int card1W = static_cast<int>(totalCardsW * 0.26f);
+    const int card2W = static_cast<int>(totalCardsW * 0.37f);
+    const int card3W = static_cast<int>(totalCardsW * 0.37f);
+    const int c1X = 24;
+    const int c2X = c1X + card1W + 12;
+    const int c3X = c2X + card2W + 12;
 
-    bandFreqLabel.setBounds(136, 514, 70, 14);
-    bandFreqSlider.setBounds(136, 528, 70, 96);
+    // Card 1: Band Shape
+    bandEnabledBtn.setBounds(c1X + card1W - 86, cardY + 4, 80, 22);
+    bandTypeLabel.setBounds(c1X + 10, cardY + 32, 86, 14);
+    bandTypeCombo.setBounds(c1X + 10, cardY + 50, juce::jmax(76, card1W / 3), 26);
 
-    bandQLabel.setBounds(208, 514, 68, 14);
-    bandQSlider.setBounds(208, 528, 68, 96);
+    const int c1KnobW = juce::jmin(72, (card1W - 110) / 2);
+    bandFreqLabel.setBounds(c1X + card1W - c1KnobW * 2 - 14, cardY + 28, c1KnobW, 14);
+    bandFreqSlider.setBounds(c1X + card1W - c1KnobW * 2 - 14, cardY + 42, c1KnobW, 96);
+    bandQLabel.setBounds(c1X + card1W - c1KnobW - 8, cardY + 28, c1KnobW, 14);
+    bandQSlider.setBounds(c1X + card1W - c1KnobW - 8, cardY + 42, c1KnobW, 96);
 
-    // Card 2: TEETH (x=296..661, y=486..636)
-    teethGainLabel.setBounds(308, 514, 76, 14);
-    teethGainSlider.setBounds(308, 528, 76, 96);
+    auto layoutBranchCard = [&](int cx, int cw,
+                                juce::Slider& gS, juce::Label& gL,
+                                juce::Slider& pS, juce::Label& pL,
+                                juce::ComboBox& satC, juce::Label& satCL,
+                                juce::Slider& dS, juce::Label& dL)
+    {
+        const int kw = juce::jmin(76, (cw - 126) / 3);
+        gL.setBounds(cx + 10, cardY + 28, kw, 14);
+        gS.setBounds(cx + 10, cardY + 42, kw, 96);
 
-    teethPanLabel.setBounds(388, 514, 76, 14);
-    teethPanSlider.setBounds(388, 528, 76, 96);
+        pL.setBounds(cx + 16 + kw, cardY + 28, kw, 14);
+        pS.setBounds(cx + 16 + kw, cardY + 42, kw, 96);
 
-    teethSatTypeLabel.setBounds(474, 518, 96, 14);
-    teethSatTypeCombo.setBounds(474, 536, 96, 26);
+        const int satX = cx + 24 + kw * 2;
+        const int comboW = juce::jmax(80, cw - kw * 3 - 42);
+        satCL.setBounds(satX, cardY + 32, comboW, 14);
+        satC.setBounds(satX, cardY + 50, comboW, 26);
 
-    teethSatDriveLabel.setBounds(576, 514, 76, 14);
-    teethSatDriveSlider.setBounds(576, 528, 76, 96);
+        dL.setBounds(cx + cw - kw - 10, cardY + 28, kw, 14);
+        dS.setBounds(cx + cw - kw - 10, cardY + 42, kw, 96);
+    };
 
-    // Card 3: TAIL (x=673..1038, y=486..636)
-    tailGainLabel.setBounds(685, 514, 76, 14);
-    tailGainSlider.setBounds(685, 528, 76, 96);
-
-    tailPanLabel.setBounds(765, 514, 76, 14);
-    tailPanSlider.setBounds(765, 528, 76, 96);
-
-    tailSatTypeLabel.setBounds(851, 518, 96, 14);
-    tailSatTypeCombo.setBounds(851, 536, 96, 26);
-
-    tailSatDriveLabel.setBounds(953, 514, 76, 14);
-    tailSatDriveSlider.setBounds(953, 528, 76, 96);
+    layoutBranchCard(c2X, card2W, teethGainSlider, teethGainLabel, teethPanSlider, teethPanLabel, teethSatTypeCombo, teethSatTypeLabel, teethSatDriveSlider, teethSatDriveLabel);
+    layoutBranchCard(c3X, card3W, tailGainSlider, tailGainLabel, tailPanSlider, tailPanLabel, tailSatTypeCombo, tailSatTypeLabel, tailSatDriveSlider, tailSatDriveLabel);
 
     manualOverlay.setBounds(getLocalBounds());
 }

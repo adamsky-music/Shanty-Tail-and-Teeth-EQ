@@ -23,6 +23,7 @@ public:
     bool hasEditor() const override { return true; }
 
     const juce::String getName() const override { return JucePlugin_Name; }
+    juce::AudioProcessorParameter* getBypassParameter() const override { return apvts.getParameter("bypass"); }
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
@@ -53,6 +54,7 @@ public:
     std::atomic<float> tailMeter  { 0.0f };
     std::atomic<float> teethSatMeter { 0.0f };
     std::atomic<float> tailSatMeter  { 0.0f };
+    std::atomic<uint32_t> lastProcessMs { 0 };
 
     static juce::String bandParamID(int bandIndex, const char* suffix)
     {

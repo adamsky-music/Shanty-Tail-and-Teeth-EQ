@@ -50,15 +50,6 @@ public:
         // Smooth saturation bite glow envelope
         satEnv = 0.82f * satEnv + 0.18f * currentSat;
 
-        lickTimer -= 1.0f / 60.0f;
-        if (lickTimer <= 0.0f)
-        {
-            lickProgress = 1.0f;
-            lickTimer = 2.4f + 1.5f * std::abs(std::cos(animTimeSec * 0.7f));
-        }
-        if (lickProgress > 0.0f)
-            lickProgress = juce::jmax(0.0f, lickProgress - (1.0f / 60.0f) * 1.75f);
-
         if (isBeingPetted)
             petHappyTimer = 1.6f;
         else if (petHappyTimer > 0.0f)
@@ -198,49 +189,8 @@ public:
         juce::Graphics::ScopedSaveState bodyScope(g);
         g.addTransform(beatTransform);
 
-        // 2. Seated Shanti body
+        // 2. Seated Shanti body (intact head/ears, zero seam cuts)
         g.drawImage(bodyFrame, destRect);
-
-        // 2b. Audio-reactive perking/twitching ears on Teeth transients
-        if (earsFrame.isValid())
-        {
-            const float earAngle = -0.095f * earEnv + std::sin(animTimeSec * 22.0f) * (0.025f * earEnv);
-            const float earPivotX = destRect.getX() + 0.655f * destRect.getWidth();
-            const float earPivotY = destRect.getY() + 0.160f * destRect.getHeight();
-
-            juce::Graphics::ScopedSaveState earScope(g);
-            g.addTransform(juce::AffineTransform::rotation(earAngle, earPivotX, earPivotY)
-                               .translated(0.0f, -1.6f * earEnv));
-            g.drawImage(earsFrame, destRect);
-        }
-
-        // 3. Tongue lick
-        const float lickEnv = (lickProgress > 0.0f)
-            ? std::sin(lickProgress * juce::MathConstants<float>::pi)
-            : 0.0f;
-
-        if (lickEnv > 0.02f)
-        {
-            const float mouthX = destRect.getX() + 0.742f * destRect.getWidth();
-            const float mouthY = destRect.getY() + 0.278f * destRect.getHeight();
-            const float reach = std::pow(lickEnv, 0.75f);
-            const float tipX = mouthX + destRect.getWidth() * (0.008f + 0.036f * reach);
-            const float tipY = mouthY + destRect.getHeight() * (0.008f - 0.028f * reach);
-            const float baseHalfW = destRect.getHeight() * 0.010f * reach;
-
-            juce::Path tongue;
-            tongue.startNewSubPath(mouthX, mouthY - baseHalfW * 0.4f);
-            tongue.quadraticTo(mouthX + (tipX - mouthX) * 0.55f, mouthY + destRect.getHeight() * 0.014f * reach,
-                               tipX, tipY);
-            tongue.quadraticTo(mouthX + (tipX - mouthX) * 0.45f, mouthY + baseHalfW * 1.3f,
-                               mouthX - destRect.getWidth() * 0.004f, mouthY + baseHalfW);
-            tongue.closeSubPath();
-
-            g.setColour(juce::Colour(0xFFE9798B).withAlpha(juce::jmin(1.0f, lickEnv * 1.4f)));
-            g.fillPath(tongue);
-            g.setColour(juce::Colour(0xFF421C23).withAlpha(juce::jmin(1.0f, lickEnv * 1.4f)));
-            g.strokePath(tongue, juce::PathStrokeType(1.0f));
-        }
 
         // 4. Eyes: Happy "^ ^" when petted, OR sly/fierce focused brow + amber glint when Saturation bites!
         if (isHappy)
@@ -388,7 +338,9 @@ private:
 
         auto isNearWhite = [&](int x, int y) -> bool {
             const auto c = srcData.getPixelColour(x, y);
-            return c.getRed() >= 235 && c.getGreen() >= 235 && c.getBlue() >= 235;
+            const int maxC = juce::jmax(static_cast<int>(c.getRed()), juce::jmax(static_cast<int>(c.getGreen()), static_cast<int>(c.getBlue())));
+            const int minC = juce::jmin(static_cast<int>(c.getRed()), juce::jmin(static_cast<int>(c.getGreen()), static_cast<int>(c.getBlue())));
+            return minC >= 218 && (maxC - minC) < 28;
         };
 
         std::vector<uint8_t> visited(static_cast<size_t>(w * h), 0);
@@ -426,6 +378,34 @@ private:
                         visited[idx] = 1;
                         q.push({ nx, ny });
                     }
+                }
+            }
+        }
+
+        // Smooth 1px anti-aliased edge feathering & white-fringe removal
+        for (int y = 1; y < h - 1; ++y)
+        {
+            for (int x = 1; x < w - 1; ++x)
+            {
+                if (visited[static_cast<size_t>(y * w + x)])
+                    continue;
+
+                bool touchesBg = false;
+                for (int d = 0; d < 4; ++d)
+                {
+                    if (visited[static_cast<size_t>((y + dy[d]) * w + (x + dx[d]))])
+                    {
+                        touchesBg = true;
+                        break;
+                    }
+                }
+                if (touchesBg)
+                {
+                    const auto c = dstData.getPixelColour(x, y);
+                    const float lum = (c.getRed() + c.getGreen() + c.getBlue()) / (3.0f * 255.0f);
+                    // Feather bright fringe pixels smoothly while keeping dark outlines crisp
+                    const float edgeAlpha = juce::jlimit(0.15f, 1.0f, 1.15f - lum * 0.95f);
+                    dstData.setPixelColour(x, y, c.withMultipliedAlpha(edgeAlpha));
                 }
             }
         }
@@ -485,9 +465,6 @@ private:
 
         const int tailCutX = static_cast<int>(w * 0.305f);
         const int tailCutY = static_cast<int>(h * 0.500f);
-        const int earMinX  = static_cast<int>(w * 0.560f);
-        const int earMaxX  = static_cast<int>(w * 0.780f);
-        const int earMaxY  = static_cast<int>(h * 0.160f);
 
         double sumX = 0.0, sumY = 0.0;
         int count = 0;
@@ -504,8 +481,6 @@ private:
 
                 if (x < tailCutX && y > tailCutY)
                     tailData.setPixelColour(x, y, c);
-                else if (x >= earMinX && x <= earMaxX && y < earMaxY)
-                    earsData.setPixelColour(x, y, c);
                 else
                     bodyData.setPixelColour(x, y, c);
 

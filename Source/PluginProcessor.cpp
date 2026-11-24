@@ -236,6 +236,7 @@ bool ShantyTailAndTeethEQProcessor::isBusesLayoutSupported(const BusesLayout& la
 void ShantyTailAndTeethEQProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
     juce::ScopedNoDenormals noDenormals;
+    lastProcessMs.store(juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
 
     const int totalIn  = getTotalNumInputChannels();
     const int totalOut = getTotalNumOutputChannels();
