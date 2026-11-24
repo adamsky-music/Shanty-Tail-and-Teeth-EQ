@@ -16,8 +16,8 @@ add_subdirectory(JUCE)
 
 juce_add_binary_data(ShantyTailTeethAssets
     SOURCES
-        Assets/shanti_v3_sheet.png
-        Assets/shanti_sleep.png
+        Assets/shanti_sitting.png
+        Assets/shanti_sleeping.png
         Assets/adamsky_logo.png
 )
 
