@@ -20,12 +20,26 @@ public:
         setMouseCursor(juce::MouseCursor::PointingHandCursor);
     }
 
-    void updateAnimation(float teethLevel, float tailLevel, float teethSat, float tailSat)
+    void updateAnimation(float teethLevel, float tailLevel, float teethSat, float tailSat, bool sleeping = false)
     {
+        isSleeping   = sleeping;
         currentTeeth = juce::jlimit(0.0f, 1.0f, teethLevel);
         currentTail  = juce::jlimit(0.0f, 1.0f, tailLevel);
         currentSat   = juce::jlimit(0.0f, 1.0f, juce::jmax(teethSat, tailSat));
         animTimeSec += 1.0f / 60.0f;
+
+        // Occasional cute ear twitch while sleeping
+        if (isSleeping)
+        {
+            sleepEarTimer -= 1.0f / 60.0f;
+            if (sleepEarTimer <= 0.0f)
+            {
+                sleepEarProgress = 1.0f;
+                sleepEarTimer = 2.6f + 2.2f * std::abs(std::sin(animTimeSec * 0.8f));
+            }
+            if (sleepEarProgress > 0.0f)
+                sleepEarProgress = juce::jmax(0.0f, sleepEarProgress - (1.0f / 60.0f) * 2.8f);
+        }
 
         // Snappy ear-twitch envelope driven by Teeth transients
         if (currentTeeth > earEnv)
@@ -108,6 +122,12 @@ public:
         const auto bounds = getLocalBounds().toFloat();
         if (!bodyFrame.isValid())
             return;
+
+        if (isSleeping && sleepBodyFrame.isValid())
+        {
+            drawSleepingShanti(g, bounds);
+            return;
+        }
 
         const bool isHappy = (petHappyTimer > 0.01f);
         const float breathY = std::sin(animTimeSec * 2.2f) * 1.0f;
@@ -320,8 +340,13 @@ private:
     juce::Image tailFrame;
     juce::Image earsFrame;
     juce::Image collarGlowImage;
+    juce::Image sleepBodyFrame;
+    juce::Image sleepEarFrame;
     juce::Point<float> collarNormCenter { 0.63f, 0.35f };
 
+    bool isSleeping    = false;
+    float sleepEarTimer = 1.8f;
+    float sleepEarProgress = 0.0f;
     float currentTeeth = 0.0f;
     float currentTail  = 0.0f;
     float currentSat   = 0.0f;
@@ -503,6 +528,115 @@ private:
         if (count > 0)
             collarNormCenter = { static_cast<float>(sumX / (count * w)),
                                  static_cast<float>(sumY / (count * h)) };
+
+        // Load curled-up sleeping Shanti
+        auto sleepSrc = juce::ImageCache::getFromMemory(BinaryData::shanti_sleep_png,
+                                                        BinaryData::shanti_sleep_pngSize);
+        if (sleepSrc.isValid())
+        {
+            auto cleanSleep = stripOuterWhiteBackground(sleepSrc);
+            const int sw = cleanSleep.getWidth();
+            const int sh = cleanSleep.getHeight();
+            sleepBodyFrame = juce::Image(juce::Image::ARGB, sw, sh, true);
+            sleepEarFrame  = juce::Image(juce::Image::ARGB, sw, sh, true);
+
+            juce::Image::BitmapData sSrc(cleanSleep, juce::Image::BitmapData::readOnly);
+            juce::Image::BitmapData sBody(sleepBodyFrame, juce::Image::BitmapData::writeOnly);
+            juce::Image::BitmapData sEar(sleepEarFrame, juce::Image::BitmapData::writeOnly);
+
+            const int sEarMinX = static_cast<int>(sw * 0.62f);
+            const int sEarMaxX = static_cast<int>(sw * 0.94f);
+            const int sEarMaxY = static_cast<int>(sh * 0.47f);
+
+            for (int y = 0; y < sh; ++y)
+            {
+                for (int x = 0; x < sw; ++x)
+                {
+                    const auto raw = sSrc.getPixelColour(x, y);
+                    if (raw.getAlpha() == 0)
+                        continue;
+                    const auto c = brightenFurPixel(raw);
+                    if (x >= sEarMinX && x <= sEarMaxX && y < sEarMaxY)
+                        sEar.setPixelColour(x, y, c);
+                    else
+                        sBody.setPixelColour(x, y, c);
+                }
+            }
+        }
+    }
+
+    void drawSleepingShanti(juce::Graphics& g, const juce::Rectangle<float>& bounds) const
+    {
+        const float breath = 0.5f + 0.5f * std::sin(animTimeSec * 1.6f);
+        const auto drawArea = bounds.reduced(6.0f, 6.0f).translated(0.0f, 10.0f);
+        const float imgW = static_cast<float>(sleepBodyFrame.getWidth());
+        const float imgH = static_cast<float>(sleepBodyFrame.getHeight());
+        const float scale = juce::jmin(1.0f, juce::jmin(drawArea.getWidth() / imgW, drawArea.getHeight() / imgH));
+        const float destW = imgW * scale;
+        const float destH = imgH * scale;
+        const juce::Rectangle<float> destRect(drawArea.getCentreX() - destW * 0.5f,
+                                              drawArea.getCentreY() - destH * 0.5f,
+                                              destW, destH);
+
+        // Soft ambient stage glow
+        {
+            const float bgCx = destRect.getCentreX();
+            const float bgCy = destRect.getCentreY() + destRect.getHeight() * 0.08f;
+            const float bgR  = destRect.getWidth() * 0.52f;
+            juce::ColourGradient stageGlow(Palette::tailCyan.withAlpha(0.10f), bgCx, bgCy,
+                                           juce::Colours::transparentBlack, bgCx + bgR, bgCy, true);
+            g.setGradientFill(stageGlow);
+            g.fillEllipse(bgCx - bgR, bgCy - bgR, bgR * 2.0f, bgR * 2.0f);
+        }
+
+        // Ground shadow
+        {
+            const float shY = destRect.getY() + destRect.getHeight() * 0.72f;
+            const auto shadowRect = juce::Rectangle<float>(destRect.getX() + destRect.getWidth() * 0.08f,
+                                                           shY,
+                                                           destRect.getWidth() * 0.84f,
+                                                           destRect.getHeight() * 0.12f);
+            g.setColour(juce::Colours::black.withAlpha(0.48f));
+            g.fillEllipse(shadowRect);
+        }
+
+        // Gentle sleeping chest/body breathing
+        const float groundX = destRect.getCentreX();
+        const float groundY = destRect.getY() + destRect.getHeight() * 0.76f;
+        const auto breathTx = juce::AffineTransform::scale(1.0f + 0.012f * breath,
+                                                           1.0f - 0.016f * breath,
+                                                           groundX, groundY);
+        {
+            juce::Graphics::ScopedSaveState ss(g);
+            g.addTransform(breathTx);
+            g.setOpacity(1.0f);
+            g.drawImage(sleepBodyFrame, destRect);
+
+            if (sleepEarFrame.isValid())
+            {
+                const float twitch = (sleepEarProgress > 0.0f)
+                    ? std::sin(sleepEarProgress * juce::MathConstants<float>::twoPi * 2.0f) * 0.075f * sleepEarProgress
+                    : 0.0f;
+                const float earPx = destRect.getX() + 0.74f * destRect.getWidth();
+                const float earPy = destRect.getY() + 0.44f * destRect.getHeight();
+                juce::Graphics::ScopedSaveState earSs(g);
+                g.addTransform(juce::AffineTransform::rotation(twitch, earPx, earPy));
+                g.drawImage(sleepEarFrame, destRect);
+            }
+        }
+
+        // Soft floating "z z Z"
+        const char* zs[3] = { "z", "z", "Z" };
+        for (int i = 0; i < 3; ++i)
+        {
+            const float cycle = std::fmod(animTimeSec * 0.42f + static_cast<float>(i) * 0.33f, 1.0f);
+            const float alpha = std::sin(cycle * juce::MathConstants<float>::pi) * 0.65f;
+            const float zx = destRect.getX() + (0.72f + 0.08f * cycle + static_cast<float>(i) * 0.03f) * destRect.getWidth();
+            const float zy = destRect.getY() + (0.34f - 0.22f * cycle) * destRect.getHeight();
+            g.setColour(Palette::tailCyan.withAlpha(alpha));
+            g.setFont(juce::FontOptions(11.0f + static_cast<float>(i) * 2.0f, juce::Font::bold));
+            g.drawText(zs[i], static_cast<int>(zx - 8), static_cast<int>(zy - 8), 16, 16, juce::Justification::centred);
+        }
     }
 };
 

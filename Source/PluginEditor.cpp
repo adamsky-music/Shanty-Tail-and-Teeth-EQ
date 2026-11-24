@@ -206,10 +206,12 @@ void ShantyTailAndTeethEQEditor::selectBand(int bandIndex)
 void ShantyTailAndTeethEQEditor::timerCallback()
 {
     spectrum.updateSpectra();
+    const bool isSleeping = bypassBtn.getToggleState() || (mixSlider.getValue() < 0.5);
     mascot.updateAnimation(processor.teethMeter.load(std::memory_order_relaxed),
                            processor.tailMeter.load(std::memory_order_relaxed),
                            processor.teethSatMeter.load(std::memory_order_relaxed),
-                           processor.tailSatMeter.load(std::memory_order_relaxed));
+                           processor.tailSatMeter.load(std::memory_order_relaxed),
+                           isSleeping);
 }
 
 void ShantyTailAndTeethEQEditor::paint(juce::Graphics& g)
