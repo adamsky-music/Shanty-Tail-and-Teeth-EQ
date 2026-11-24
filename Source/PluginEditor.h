@@ -5,6 +5,7 @@
 #include "CustomLookAndFeel.h"
 #include "ShantyMascot.h"
 #include "SpectrumAnalyzerComponent.h"
+#include "ManualOverlay.h"
 #include <array>
 #include <memory>
 
@@ -37,9 +38,12 @@ private:
     juce::Label sepLabel, smoothLabel, decayLabel;
 
     juce::TextButton bypassBtn { "BYPASS" };
+    juce::TextButton manualBtn { "?" };
     juce::TextButton msBtn     { "M/S" };
     juce::TextButton teethSoloBtn { "SOLO TEETH" };
     juce::TextButton tailSoloBtn  { "SOLO TAIL" };
+
+    ShantyEQ::ManualOverlayComponent manualOverlay;
 
     // Graph edit target buttons
     juce::TextButton editTeethBtn { "TEETH" };

@@ -50,6 +50,7 @@ target_sources(ShantyTailAndTeethEQ
         Source/SpectrumAnalyzerComponent.h
         Source/CustomLookAndFeel.h
         Source/ShantyMascot.h
+        Source/ManualOverlay.h
 )
 
 target_compile_definitions(ShantyTailAndTeethEQ

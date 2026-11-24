@@ -43,6 +43,14 @@ ShantyTailAndTeethEQEditor::ShantyTailAndTeethEQEditor(ShantyTailAndTeethEQProce
     setupToggleBtn(teethSoloBtn, ShantyEQ::Palette::teethRed);
     setupToggleBtn(tailSoloBtn, ShantyEQ::Palette::tailCyan);
 
+    manualBtn.setColour(juce::TextButton::buttonColourId, ShantyEQ::Palette::bgCanvas);
+    manualBtn.setColour(juce::TextButton::textColourOffId, ShantyEQ::Palette::tailCyan);
+    manualBtn.onClick = [this] {
+        manualOverlay.setVisible(true);
+        manualOverlay.toFront(true);
+    };
+    addAndMakeVisible(manualBtn);
+
     // Edit Target buttons
     auto setupEditBtn = [this](juce::TextButton& btn, ShantyEQ::EditTarget target, juce::Colour col)
     {
@@ -130,6 +138,7 @@ ShantyTailAndTeethEQEditor::ShantyTailAndTeethEQEditor(ShantyTailAndTeethEQProce
     outputAtt     = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.apvts, "outputGain", outputSlider);
 
     selectBand(0);
+    addChildComponent(manualOverlay);
     startTimerHz(60);
 }
 
@@ -227,7 +236,7 @@ void ShantyTailAndTeethEQEditor::paint(juce::Graphics& g)
 
     g.setColour(ShantyEQ::Palette::textSecondary);
     g.setFont(11.0f);
-    g.drawText("ADAMSKY MUSIC  •  STRUCTURAL SPLIT & SATURATION", titleX, 41, 290, 16, juce::Justification::centredLeft);
+    g.drawText(juce::String::fromUTF8("ADAMSKY MUSIC  \xe2\x80\xa2  STRUCTURAL SPLIT & SATURATION"), titleX, 41, 300, 16, juce::Justification::centredLeft);
 
     // Right Shanty Panel background
     const auto rightPanel = juce::Rectangle<float>(static_cast<float>(getWidth() - 252), 80.0f, 240.0f, 356.0f);
@@ -284,10 +293,11 @@ void ShantyTailAndTeethEQEditor::resized()
     placeTopKnob(decaySlider, decayLabel, 626);
 
     // Header right buttons
-    teethSoloBtn.setBounds(710, 24, 90, 30);
-    tailSoloBtn.setBounds(806, 24, 84, 30);
-    msBtn.setBounds(896, 24, 52, 30);
-    bypassBtn.setBounds(954, 24, 98, 30);
+    teethSoloBtn.setBounds(704, 24, 86, 30);
+    tailSoloBtn.setBounds(795, 24, 80, 30);
+    msBtn.setBounds(880, 24, 48, 30);
+    bypassBtn.setBounds(933, 24, 82, 30);
+    manualBtn.setBounds(1020, 24, 34, 30);
 
     // Spectrum Analyzer (left-center)
     spectrum.setBounds(12, 80, getWidth() - 274, 356);
@@ -352,4 +362,6 @@ void ShantyTailAndTeethEQEditor::resized()
 
     tailSatDriveLabel.setBounds(953, 514, 76, 14);
     tailSatDriveSlider.setBounds(953, 528, 76, 96);
+
+    manualOverlay.setBounds(getLocalBounds());
 }
