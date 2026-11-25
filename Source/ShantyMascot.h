@@ -28,18 +28,6 @@ public:
         currentSat   = juce::jlimit(0.0f, 1.0f, juce::jmax(teethSat, tailSat));
         animTimeSec += 1.0f / 60.0f;
 
-        if (isSleeping)
-        {
-            sleepEarTimer -= 1.0f / 60.0f;
-            if (sleepEarTimer <= 0.0f)
-            {
-                sleepEarProgress = 1.0f;
-                sleepEarTimer = 2.6f + 2.2f * std::abs(std::sin(animTimeSec * 0.8f));
-            }
-            if (sleepEarProgress > 0.0f)
-                sleepEarProgress = juce::jmax(0.0f, sleepEarProgress - (1.0f / 60.0f) * 2.8f);
-        }
-
         if (currentTeeth > earEnv)
             earEnv = 0.45f * earEnv + 0.55f * currentTeeth;
         else
@@ -284,13 +272,9 @@ private:
     juce::Image tailFrame;
     juce::Image collarGlowImage;
     juce::Image sleepBodyFrame;
-    juce::Image sleepLeftEarFrame;
-    juce::Image sleepRightEarFrame;
     juce::Point<float> collarNormCenter { 0.65f, 0.36f };
 
     bool isSleeping        = false;
-    float sleepEarTimer    = 1.8f;
-    float sleepEarProgress = 0.0f;
     float currentTeeth     = 0.0f;
     float currentTail      = 0.0f;
     float currentSat       = 0.0f;
@@ -520,7 +504,7 @@ private:
             collarNormCenter = { static_cast<float>(sumX / (count * w)),
                                  static_cast<float>(sumY / (count * h)) };
 
-        // Load curled-up sleeping Shanti from PumpCraft asset
+        // Load intact curled-up sleeping Shanti (zero cuts)
         auto sleepSrc = juce::ImageCache::getFromMemory(BinaryData::shanti_sleeping_png,
                                                         BinaryData::shanti_sleeping_pngSize);
         if (sleepSrc.isValid())
@@ -528,55 +512,18 @@ private:
             auto cleanSleep = stripOuterWhiteBackground(sleepSrc);
             const int sw = cleanSleep.getWidth();
             const int sh = cleanSleep.getHeight();
-            sleepBodyFrame     = juce::Image(juce::Image::ARGB, sw, sh, true);
-            sleepLeftEarFrame  = juce::Image(juce::Image::ARGB, sw, sh, true);
-            sleepRightEarFrame = juce::Image(juce::Image::ARGB, sw, sh, true);
+            sleepBodyFrame = juce::Image(juce::Image::ARGB, sw, sh, true);
 
             juce::Image::BitmapData sSrc(cleanSleep, juce::Image::BitmapData::readOnly);
             juce::Image::BitmapData sBody(sleepBodyFrame, juce::Image::BitmapData::writeOnly);
-            juce::Image::BitmapData sLeftEar(sleepLeftEarFrame, juce::Image::BitmapData::writeOnly);
-            juce::Image::BitmapData sRightEar(sleepRightEarFrame, juce::Image::BitmapData::writeOnly);
-
-            // Split only the upper ear silhouettes and tuck a 16px overlap behind the head
-            const int lEarMinX = static_cast<int>(sw * 0.640f);
-            const int lEarMaxX = static_cast<int>(sw * 0.762f);
-            const int lEarCutY = static_cast<int>(sh * 0.415f);
-
-            const int rEarMinX = static_cast<int>(sw * 0.815f);
-            const int rEarMaxX = static_cast<int>(sw * 0.945f);
-            const int rEarCutY = static_cast<int>(sh * 0.445f);
-
-            const int overlapPx = 16;
 
             for (int y = 0; y < sh; ++y)
             {
                 for (int x = 0; x < sw; ++x)
                 {
                     const auto raw = sSrc.getPixelColour(x, y);
-                    if (raw.getAlpha() == 0)
-                        continue;
-                    const auto c = brightenFurPixel(raw);
-
-                    const bool inLeftEar  = (x >= lEarMinX && x <= lEarMaxX && y < lEarCutY);
-                    const bool inRightEar = (x >= rEarMinX && x <= rEarMaxX && y < rEarCutY);
-
-                    if (inLeftEar)
-                    {
-                        sLeftEar.setPixelColour(x, y, c);
-                    }
-                    else if (inRightEar)
-                    {
-                        sRightEar.setPixelColour(x, y, c);
-                    }
-                    else
-                    {
-                        sBody.setPixelColour(x, y, c);
-                        // Tuck ear roots seamlessly behind the head
-                        if (x >= lEarMinX && x <= lEarMaxX && y >= lEarCutY && y < lEarCutY + overlapPx)
-                            sLeftEar.setPixelColour(x, y, c);
-                        if (x >= rEarMinX && x <= rEarMaxX && y >= rEarCutY && y < rEarCutY + overlapPx)
-                            sRightEar.setPixelColour(x, y, c);
-                    }
+                    if (raw.getAlpha() > 0)
+                        sBody.setPixelColour(x, y, brightenFurPixel(raw));
                 }
             }
         }
@@ -624,31 +571,25 @@ private:
             juce::Graphics::ScopedSaveState ss(g);
             g.addTransform(breathTx);
             g.setOpacity(1.0f);
-
-            const float twitch = (sleepEarProgress > 0.0f)
-                ? std::sin(sleepEarProgress * juce::MathConstants<float>::twoPi * 2.0f) * 0.065f * sleepEarProgress
-                : 0.0f;
-
-            // Draw both ears BEHIND the head so their roots stay seamlessly tucked
-            if (sleepLeftEarFrame.isValid())
-            {
-                const float lPx = destRect.getX() + 0.700f * destRect.getWidth();
-                const float lPy = destRect.getY() + 0.415f * destRect.getHeight();
-                juce::Graphics::ScopedSaveState earSs(g);
-                g.addTransform(juce::AffineTransform::rotation(-twitch, lPx, lPy));
-                g.drawImage(sleepLeftEarFrame, destRect);
-            }
-
-            if (sleepRightEarFrame.isValid())
-            {
-                const float rPx = destRect.getX() + 0.855f * destRect.getWidth();
-                const float rPy = destRect.getY() + 0.445f * destRect.getHeight();
-                juce::Graphics::ScopedSaveState earSs(g);
-                g.addTransform(juce::AffineTransform::rotation(twitch * 0.85f, rPx, rPy));
-                g.drawImage(sleepRightEarFrame, destRect);
-            }
-
             g.drawImage(sleepBodyFrame, destRect);
+        }
+
+        // Floating hearts if petted while sleeping (she stays peacefully asleep!)
+        for (const auto& h : hearts)
+        {
+            if (h.life > 0.01f)
+            {
+                const float alpha = juce::jmin(1.0f, h.life * 1.4f);
+                const float s = 5.5f;
+                juce::Path heart;
+                heart.startNewSubPath(h.x, h.y + s * 0.35f);
+                heart.cubicTo(h.x - s, h.y - s * 0.4f, h.x - s * 0.5f, h.y - s * 1.1f, h.x, h.y - s * 0.45f);
+                heart.cubicTo(h.x + s * 0.5f, h.y - s * 1.1f, h.x + s, h.y - s * 0.4f, h.x, h.y + s * 0.35f);
+                heart.closeSubPath();
+
+                g.setColour(Palette::teethRed.withAlpha(alpha));
+                g.fillPath(heart);
+            }
         }
 
         const char* zs[3] = { "z", "z", "Z" };
