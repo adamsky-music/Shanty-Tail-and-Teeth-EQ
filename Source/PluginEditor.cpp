@@ -11,8 +11,36 @@ ShantyTailAndTeethEQEditor::ShantyTailAndTeethEQEditor(ShantyTailAndTeethEQProce
     setResizeLimits(880, 560, 1920, 1200);
     setSize(1080, 660);
 
-    adamskyLogo = juce::ImageCache::getFromMemory(BinaryData::adamsky_logo_png,
-                                                  BinaryData::adamsky_logo_pngSize);
+    // Load Adamsky Music heart logo and key out pure-black background
+    {
+        auto rawLogo = juce::ImageCache::getFromMemory(BinaryData::adamsky_logo_png,
+                                                       BinaryData::adamsky_logo_pngSize);
+        if (rawLogo.isValid())
+        {
+            const int lw = rawLogo.getWidth();
+            const int lh = rawLogo.getHeight();
+            adamskyLogo = juce::Image(juce::Image::ARGB, lw, lh, true);
+            juce::Image::BitmapData src(rawLogo, juce::Image::BitmapData::readOnly);
+            juce::Image::BitmapData dst(adamskyLogo, juce::Image::BitmapData::writeOnly);
+
+            for (int y = 0; y < lh; ++y)
+            {
+                for (int x = 0; x < lw; ++x)
+                {
+                    const auto c = src.getPixelColour(x, y);
+                    const int maxC = juce::jmax(static_cast<int>(c.getRed()),
+                                                juce::jmax(static_cast<int>(c.getGreen()),
+                                                           static_cast<int>(c.getBlue())));
+                    if (maxC < 12)
+                        dst.setPixelColour(x, y, juce::Colours::transparentBlack);
+                    else if (maxC < 36)
+                        dst.setPixelColour(x, y, c.withAlpha(static_cast<float>(maxC - 12) / 24.0f));
+                    else
+                        dst.setPixelColour(x, y, c);
+                }
+            }
+        }
+    }
 
     addAndMakeVisible(spectrum);
     addAndMakeVisible(mascot);
