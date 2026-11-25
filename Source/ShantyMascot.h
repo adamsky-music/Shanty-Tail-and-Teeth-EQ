@@ -162,12 +162,12 @@ public:
         {
             float wagAngle = 0.0f;
             if (isHappy)
-                wagAngle = std::sin(animTimeSec * 18.0f) * 0.24f;
+                wagAngle = std::sin(animTimeSec * 18.0f) * 0.13f;
             else
-                wagAngle = std::sin(animTimeSec * (2.5f + currentTail * 10.0f)) * (0.02f + 0.18f * currentTail);
+                wagAngle = std::sin(animTimeSec * (2.5f + currentTail * 10.0f)) * (0.015f + 0.11f * currentTail);
 
-            const float pivotX = destRect.getX() + 0.320f * destRect.getWidth();
-            const float pivotY = destRect.getY() + 0.800f * destRect.getHeight();
+            const float pivotX = destRect.getX() + 0.328f * destRect.getWidth();
+            const float pivotY = destRect.getY() + 0.835f * destRect.getHeight();
 
             juce::Graphics::ScopedSaveState ss(g);
             g.addTransform(juce::AffineTransform::rotation(wagAngle, pivotX, pivotY));
@@ -193,22 +193,22 @@ public:
         if (isHappy)
         {
             const float happyAlpha = juce::jmin(1.0f, petHappyTimer * 1.5f);
-            auto drawHappyEye = [&](float cxNorm, float cyNorm, float rx) {
+            auto drawHappyEye = [&](float cxNorm, float cyNorm, float rx, float ry) {
                 const float cx = destRect.getX() + cxNorm * destRect.getWidth();
                 const float cy = destRect.getY() + cyNorm * destRect.getHeight();
                 g.setColour(juce::Colour(0xFFF6F8FA).withAlpha(happyAlpha));
-                g.fillEllipse(cx - rx * 1.35f, cy - rx * 1.15f, rx * 2.7f, rx * 2.3f);
+                g.fillEllipse(cx - rx, cy - ry, rx * 2.0f, ry * 2.0f);
 
                 juce::Path arc;
-                arc.startNewSubPath(cx - rx * 1.1f, cy + rx * 0.25f);
-                arc.quadraticTo(cx, cy - rx * 0.95f, cx + rx * 1.1f, cy + rx * 0.25f);
+                arc.startNewSubPath(cx - rx * 0.80f, cy + ry * 0.22f);
+                arc.quadraticTo(cx, cy - ry * 0.82f, cx + rx * 0.80f, cy + ry * 0.22f);
                 g.setColour(juce::Colour(0xFF22252A).withAlpha(happyAlpha));
-                g.strokePath(arc, juce::PathStrokeType(1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                g.strokePath(arc, juce::PathStrokeType(2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
             };
 
-            const float eyeR = destRect.getWidth() * 0.015f;
-            drawHappyEye(0.680f, 0.188f, eyeR);
-            drawHappyEye(0.768f, 0.184f, eyeR * 0.85f);
+            const float w = destRect.getWidth();
+            drawHappyEye(0.736f, 0.255f, w * 0.023f, w * 0.021f);
+            drawHappyEye(0.797f, 0.251f, w * 0.0135f, w * 0.020f);
         }
         else if (satEnv > 0.06f)
         {
@@ -222,14 +222,14 @@ public:
                 g.fillEllipse(cx - rx * 0.35f, cy - rx * 0.35f, rx * 0.7f, rx * 0.7f);
             };
             const float eyeR = destRect.getWidth() * 0.015f;
-            drawBiteBrow(0.680f, 0.188f, eyeR, 0.35f);
-            drawBiteBrow(0.768f, 0.184f, eyeR * 0.85f, 0.35f);
+            drawBiteBrow(0.736f, 0.255f, eyeR, 0.35f);
+            drawBiteBrow(0.797f, 0.251f, eyeR * 0.80f, 0.35f);
 
             for (int i = 0; i < 3; ++i)
             {
                 const float phase = animTimeSec * 9.0f + static_cast<float>(i) * 2.1f;
-                const float sx = destRect.getX() + (0.81f + 0.04f * std::sin(phase)) * destRect.getWidth();
-                const float sy = destRect.getY() + (0.26f + 0.03f * std::cos(phase * 1.3f)) * destRect.getHeight();
+                const float sx = destRect.getX() + (0.84f + 0.04f * std::sin(phase)) * destRect.getWidth();
+                const float sy = destRect.getY() + (0.31f + 0.03f * std::cos(phase * 1.3f)) * destRect.getHeight();
                 const float sr = (1.6f + 1.4f * std::abs(std::sin(phase))) * biteAlpha;
                 g.setColour(Palette::satAmber.withAlpha(0.8f * biteAlpha));
                 g.fillEllipse(sx - sr, sy - sr, sr * 2.0f, sr * 2.0f);
@@ -444,7 +444,12 @@ private:
             return;
 
         // Seed enclosed white triangle between hind leg and front leg
-        auto fullSit = stripOuterWhiteBackground(rawSit, { { 0.595f, 0.780f } });
+        auto fullSit = stripOuterWhiteBackground(rawSit, {
+            { 0.555f, 0.822f },
+            { 0.565f, 0.815f },
+            { 0.545f, 0.828f },
+            { 0.575f, 0.825f }
+        });
 
         const int w = fullSit.getWidth();
         const int h = fullSit.getHeight();
@@ -458,11 +463,14 @@ private:
         juce::Image::BitmapData tailData(tailFrame, juce::Image::BitmapData::writeOnly);
         juce::Image::BitmapData glowData(collarGlowImage, juce::Image::BitmapData::writeOnly);
 
-        const int tailCutX = static_cast<int>(w * 0.320f);
-        const int tailCutY = static_cast<int>(h * 0.560f);
-        const int tailRootMinY = static_cast<int>(h * 0.780f);
-        const int tailRootMaxY = static_cast<int>(h * 0.875f);
-        const int tailOverlapPx = 14;
+        const int tailTipMaxX     = static_cast<int>(w * 0.285f);
+        const int tailTipMinY     = static_cast<int>(h * 0.520f);
+        const int tailRootMinY    = static_cast<int>(h * 0.795f);
+        const int tailRootMaxY    = static_cast<int>(h * 0.892f);
+        const int tailRootCutX    = static_cast<int>(w * 0.326f);
+        const int tailOverlapMinY = static_cast<int>(h * 0.810f);
+        const int tailOverlapMaxY = static_cast<int>(h * 0.865f);
+        const int tailOverlapPx   = 8;
 
         double sumX = 0.0, sumY = 0.0;
         int count = 0;
@@ -477,14 +485,17 @@ private:
 
                 const auto c = brightenFurPixel(raw);
 
-                if (x < tailCutX && y > tailCutY)
+                const bool isTailTip  = (y >= tailTipMinY && y < tailRootMinY && x < tailTipMaxX);
+                const bool isTailRoot = (y >= tailRootMinY && y <= tailRootMaxY && x < tailRootCutX);
+
+                if (isTailTip || isTailRoot)
                 {
                     tailData.setPixelColour(x, y, c);
                 }
                 else
                 {
                     bodyData.setPixelColour(x, y, c);
-                    if (y >= tailRootMinY && y <= tailRootMaxY && x >= tailCutX && x < tailCutX + tailOverlapPx)
+                    if (y >= tailOverlapMinY && y <= tailOverlapMaxY && x >= tailRootCutX && x < tailRootCutX + tailOverlapPx)
                         tailData.setPixelColour(x, y, c);
                 }
 
