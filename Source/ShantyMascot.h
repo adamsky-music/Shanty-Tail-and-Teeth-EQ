@@ -284,7 +284,8 @@ private:
     juce::Image tailFrame;
     juce::Image collarGlowImage;
     juce::Image sleepBodyFrame;
-    juce::Image sleepEarFrame;
+    juce::Image sleepLeftEarFrame;
+    juce::Image sleepRightEarFrame;
     juce::Point<float> collarNormCenter { 0.65f, 0.36f };
 
     bool isSleeping        = false;
@@ -527,16 +528,25 @@ private:
             auto cleanSleep = stripOuterWhiteBackground(sleepSrc);
             const int sw = cleanSleep.getWidth();
             const int sh = cleanSleep.getHeight();
-            sleepBodyFrame = juce::Image(juce::Image::ARGB, sw, sh, true);
-            sleepEarFrame  = juce::Image(juce::Image::ARGB, sw, sh, true);
+            sleepBodyFrame     = juce::Image(juce::Image::ARGB, sw, sh, true);
+            sleepLeftEarFrame  = juce::Image(juce::Image::ARGB, sw, sh, true);
+            sleepRightEarFrame = juce::Image(juce::Image::ARGB, sw, sh, true);
 
             juce::Image::BitmapData sSrc(cleanSleep, juce::Image::BitmapData::readOnly);
             juce::Image::BitmapData sBody(sleepBodyFrame, juce::Image::BitmapData::writeOnly);
-            juce::Image::BitmapData sEar(sleepEarFrame, juce::Image::BitmapData::writeOnly);
+            juce::Image::BitmapData sLeftEar(sleepLeftEarFrame, juce::Image::BitmapData::writeOnly);
+            juce::Image::BitmapData sRightEar(sleepRightEarFrame, juce::Image::BitmapData::writeOnly);
 
-            const int sEarMinX = static_cast<int>(sw * 0.62f);
-            const int sEarMaxX = static_cast<int>(sw * 0.94f);
-            const int sEarMaxY = static_cast<int>(sh * 0.47f);
+            // Split only the upper ear silhouettes and tuck a 16px overlap behind the head
+            const int lEarMinX = static_cast<int>(sw * 0.640f);
+            const int lEarMaxX = static_cast<int>(sw * 0.762f);
+            const int lEarCutY = static_cast<int>(sh * 0.415f);
+
+            const int rEarMinX = static_cast<int>(sw * 0.815f);
+            const int rEarMaxX = static_cast<int>(sw * 0.945f);
+            const int rEarCutY = static_cast<int>(sh * 0.445f);
+
+            const int overlapPx = 16;
 
             for (int y = 0; y < sh; ++y)
             {
@@ -546,10 +556,27 @@ private:
                     if (raw.getAlpha() == 0)
                         continue;
                     const auto c = brightenFurPixel(raw);
-                    if (x >= sEarMinX && x <= sEarMaxX && y < sEarMaxY)
-                        sEar.setPixelColour(x, y, c);
+
+                    const bool inLeftEar  = (x >= lEarMinX && x <= lEarMaxX && y < lEarCutY);
+                    const bool inRightEar = (x >= rEarMinX && x <= rEarMaxX && y < rEarCutY);
+
+                    if (inLeftEar)
+                    {
+                        sLeftEar.setPixelColour(x, y, c);
+                    }
+                    else if (inRightEar)
+                    {
+                        sRightEar.setPixelColour(x, y, c);
+                    }
                     else
+                    {
                         sBody.setPixelColour(x, y, c);
+                        // Tuck ear roots seamlessly behind the head
+                        if (x >= lEarMinX && x <= lEarMaxX && y >= lEarCutY && y < lEarCutY + overlapPx)
+                            sLeftEar.setPixelColour(x, y, c);
+                        if (x >= rEarMinX && x <= rEarMaxX && y >= rEarCutY && y < rEarCutY + overlapPx)
+                            sRightEar.setPixelColour(x, y, c);
+                    }
                 }
             }
         }
@@ -597,19 +624,31 @@ private:
             juce::Graphics::ScopedSaveState ss(g);
             g.addTransform(breathTx);
             g.setOpacity(1.0f);
-            g.drawImage(sleepBodyFrame, destRect);
 
-            if (sleepEarFrame.isValid())
+            const float twitch = (sleepEarProgress > 0.0f)
+                ? std::sin(sleepEarProgress * juce::MathConstants<float>::twoPi * 2.0f) * 0.065f * sleepEarProgress
+                : 0.0f;
+
+            // Draw both ears BEHIND the head so their roots stay seamlessly tucked
+            if (sleepLeftEarFrame.isValid())
             {
-                const float twitch = (sleepEarProgress > 0.0f)
-                    ? std::sin(sleepEarProgress * juce::MathConstants<float>::twoPi * 2.0f) * 0.075f * sleepEarProgress
-                    : 0.0f;
-                const float earPx = destRect.getX() + 0.74f * destRect.getWidth();
-                const float earPy = destRect.getY() + 0.44f * destRect.getHeight();
+                const float lPx = destRect.getX() + 0.700f * destRect.getWidth();
+                const float lPy = destRect.getY() + 0.415f * destRect.getHeight();
                 juce::Graphics::ScopedSaveState earSs(g);
-                g.addTransform(juce::AffineTransform::rotation(twitch, earPx, earPy));
-                g.drawImage(sleepEarFrame, destRect);
+                g.addTransform(juce::AffineTransform::rotation(-twitch, lPx, lPy));
+                g.drawImage(sleepLeftEarFrame, destRect);
             }
+
+            if (sleepRightEarFrame.isValid())
+            {
+                const float rPx = destRect.getX() + 0.855f * destRect.getWidth();
+                const float rPy = destRect.getY() + 0.445f * destRect.getHeight();
+                juce::Graphics::ScopedSaveState earSs(g);
+                g.addTransform(juce::AffineTransform::rotation(twitch * 0.85f, rPx, rPy));
+                g.drawImage(sleepRightEarFrame, destRect);
+            }
+
+            g.drawImage(sleepBodyFrame, destRect);
         }
 
         const char* zs[3] = { "z", "z", "Z" };
