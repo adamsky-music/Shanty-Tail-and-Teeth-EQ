@@ -35,6 +35,7 @@ struct BandParams
     FilterType type = FilterType::Bell;
     float freq = 1000.0f;
     float q = 1.0f;
+    int slopeStages = 1; // 1 = 12 dB/oct, 2 = 24 dB/oct, 4 = 48 dB/oct (for LowCut / HighCut)
 
     // Teeth (Transient)
     float teethGainDb = 0.0f;
@@ -239,15 +240,20 @@ class BandProcessor
 public:
     void reset() noexcept
     {
-        eqFilter.reset();
+        for (auto& f : eqFilters)
+            f.reset();
         satExtractFilter.reset();
         satPostFilter.reset();
+        soloExtractFilter.reset();
         prevSlice[0] = prevSlice[1] = 0.0f;
     }
 
     void update(double sampleRate, const BandParams& p) noexcept
     {
         params = p;
+        const bool isCut = (p.type == FilterType::LowCut || p.type == FilterType::HighCut);
+        numStages = (p.enabled && isCut) ? juce::jlimit(1, 4, p.slopeStages) : 1;
+
         teethCoeffs = p.enabled
             ? BiquadCoeffs::makeFilter(sampleRate, p.type, p.freq, p.q, p.teethGainDb)
             : BiquadCoeffs::makeIdentity();
@@ -315,8 +321,11 @@ public:
             return;
 
         const BiquadCoeffs& c = isTeeth ? teethCoeffs : tailCoeffs;
-        l = eqFilter.processSample(0, l, c);
-        r = eqFilter.processSample(1, r, c);
+        for (int s = 0; s < numStages; ++s)
+        {
+            l = eqFilters[static_cast<size_t>(s)].processSample(0, l, c);
+            r = eqFilters[static_cast<size_t>(s)].processSample(1, r, c);
+        }
 
         const SatType satType   = isTeeth ? params.teethSatType : params.tailSatType;
         const float   satDrive  = isTeeth ? params.teethSatDrive : params.tailSatDrive;
@@ -361,22 +370,33 @@ public:
         }
     }
 
+    inline void processSoloExtract(float& l, float& r) noexcept
+    {
+        l = soloExtractFilter.processSample(0, l, extractCoeffs);
+        r = soloExtractFilter.processSample(1, r, extractCoeffs);
+    }
+
     double getMagnitude(double sampleRate, double freq, bool isTeeth) const noexcept
     {
         if (!params.enabled)
             return 1.0;
-        return (isTeeth ? teethCoeffs : tailCoeffs).getMagnitude(sampleRate, freq);
+        const double singleMag = (isTeeth ? teethCoeffs : tailCoeffs).getMagnitude(sampleRate, freq);
+        if (numStages <= 1)
+            return singleMag;
+        return std::pow(singleMag, static_cast<double>(numStages));
     }
 
 private:
     BandParams params;
+    int numStages = 1;
     BiquadCoeffs teethCoeffs;
     BiquadCoeffs tailCoeffs;
     BiquadCoeffs extractCoeffs;
 
-    StereoBiquad eqFilter;
+    std::array<StereoBiquad, 4> eqFilters;
     StereoBiquad satExtractFilter;
     StereoBiquad satPostFilter;
+    StereoBiquad soloExtractFilter;
     float prevSlice[2] = { 0.0f, 0.0f };
 };
 

@@ -50,6 +50,11 @@ public:
     ShantyEQ::BandParams getBandParams(int bandIndex) const;
     double getCurrentSampleRate() const noexcept { return currentSampleRate; }
 
+    void resetBand(int bandIndex);
+    void applyPreset(int presetIndex);
+    static juce::StringArray getPresetNames();
+
+    std::atomic<int> soloBandIndex { -1 };
     std::atomic<float> teethMeter { 0.0f };
     std::atomic<float> tailMeter  { 0.0f };
     std::atomic<float> teethSatMeter { 0.0f };
@@ -80,6 +85,7 @@ private:
     {
         std::atomic<float>* enabled = nullptr;
         std::atomic<float>* type = nullptr;
+        std::atomic<float>* slope = nullptr;
         std::atomic<float>* freq = nullptr;
         std::atomic<float>* q = nullptr;
         std::atomic<float>* teethGain = nullptr;
@@ -106,7 +112,12 @@ private:
     std::atomic<float>* midSidePtr = nullptr;
     std::atomic<float>* mixPtr = nullptr;
     std::atomic<float>* outputGainPtr = nullptr;
+    std::atomic<float>* autoGainPtr = nullptr;
     std::atomic<float>* bypassPtr = nullptr;
+
+    float autoGainInSq  = 1.0e-6f;
+    float autoGainWetSq = 1.0e-6f;
+    float autoGainCur   = 1.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ShantyTailAndTeethEQProcessor)
 };

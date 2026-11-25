@@ -23,6 +23,8 @@ private:
     void timerCallback() override;
     void selectBand(int bandIndex);
     void setupKnob(juce::Slider& s, juce::Label& l, const juce::String& text, const juce::String& role, bool bipolar = false);
+    void switchAB(bool useB);
+    void updateBandSoloUI();
 
     ShantyTailAndTeethEQProcessor& processor;
     ShantyEQ::ShantyLookAndFeel lnf;
@@ -31,7 +33,13 @@ private:
     ShantyEQ::SpectrumAnalyzerComponent spectrum;
     ShantyEQ::ShantyMascotComponent mascot;
 
-    // Top Split Engine controls
+    // Top Split Engine, Presets & A/B
+    juce::ComboBox presetCombo;
+    juce::TextButton abBtnA { "A" };
+    juce::TextButton abBtnB { "B" };
+    bool isSlotB = false;
+    juce::ValueTree stateSlotA, stateSlotB;
+
     juce::ComboBox sourceCombo;
     juce::Label sourceLabel;
     juce::Slider sepSlider, smoothSlider, decaySlider;
@@ -53,13 +61,16 @@ private:
     // Right column global bus knobs
     juce::Slider teethLevelSlider, tailLevelSlider, mixSlider, outputSlider;
     juce::Label teethLevelLabel, tailLevelLabel, mixLabel, outputLabel;
+    juce::TextButton autoGainBtn { "AUTO" };
 
     // Bottom Band Inspector
     int currentBand = 0;
     std::array<juce::TextButton, ShantyEQ::numBands> bandButtons;
 
     juce::ToggleButton bandEnabledBtn { "Active" };
-    juce::ComboBox bandTypeCombo;
+    juce::TextButton bandSoloBtn { "SOLO" };
+    juce::TextButton bandResetBtn { "RST" };
+    juce::ComboBox bandTypeCombo, bandSlopeCombo;
     juce::Label bandTypeLabel;
     juce::Slider bandFreqSlider, bandQSlider;
     juce::Label bandFreqLabel, bandQLabel;
@@ -77,12 +88,12 @@ private:
     // Global APVTS Attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> sourceAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sepAtt, smoothAtt, decayAtt;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAtt, msAtt, teethSoloAtt, tailSoloAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAtt, msAtt, teethSoloAtt, tailSoloAtt, autoGainAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> teethLevelAtt, tailLevelAtt, mixAtt, outputAtt;
 
     // Per-band dynamic APVTS Attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bandEnabledAtt;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> bandTypeAtt, teethSatTypeAtt, tailSatTypeAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> bandTypeAtt, bandSlopeAtt, teethSatTypeAtt, tailSatTypeAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> bandFreqAtt, bandQAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> teethGainAtt, teethPanAtt, teethSatDriveAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> tailGainAtt, tailPanAtt, tailSatDriveAtt;

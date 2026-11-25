@@ -26,6 +26,7 @@ public:
     }
 
     std::function<void(int)> onBandSelected;
+    std::function<void()> onBandSoloChanged;
 
     void setSelectedBand(int idx)
     {
@@ -72,9 +73,20 @@ public:
         if (hit >= 0)
         {
             selectedBand = hit;
-            draggingBand = hit;
             if (onBandSelected)
                 onBandSelected(selectedBand);
+
+            if (e.mods.isAltDown())
+            {
+                const int curSolo = processor.soloBandIndex.load(std::memory_order_relaxed);
+                processor.soloBandIndex.store(curSolo == hit ? -1 : hit, std::memory_order_relaxed);
+                if (onBandSoloChanged)
+                    onBandSoloChanged();
+                repaint();
+                return;
+            }
+
+            draggingBand = hit;
 
             if (auto* fp = processor.apvts.getParameter(ShantyTailAndTeethEQProcessor::bandParamID(hit, "freq")))
                 fp->beginChangeGesture();
@@ -130,6 +142,20 @@ public:
                     gp->endChangeGesture();
 
             draggingBand = -1;
+        }
+    }
+
+    void mouseDoubleClick(const juce::MouseEvent& e) override
+    {
+        const auto plot = getLocalBounds().toFloat().reduced(10.0f, 10.0f);
+        const int hit = findNearestNode(e.position, plot, 22.0f);
+        if (hit >= 0)
+        {
+            processor.resetBand(hit);
+            selectedBand = hit;
+            if (onBandSelected)
+                onBandSelected(selectedBand);
+            repaint();
         }
     }
 
@@ -295,8 +321,18 @@ private:
             double magTeeth = 1.0, magTail = 1.0;
             for (int b = 0; b < numBands; ++b)
             {
-                magTeeth *= teethC[static_cast<size_t>(b)].getMagnitude(sr, freq);
-                magTail  *= tailC[static_cast<size_t>(b)].getMagnitude(sr, freq);
+                const auto& bp = bands[static_cast<size_t>(b)];
+                const bool isCut = (bp.type == FilterType::LowCut || bp.type == FilterType::HighCut);
+                const int stages = (bp.enabled && isCut) ? bp.slopeStages : 1;
+                double mTr = teethC[static_cast<size_t>(b)].getMagnitude(sr, freq);
+                double mTn = tailC[static_cast<size_t>(b)].getMagnitude(sr, freq);
+                if (stages > 1)
+                {
+                    mTr = std::pow(mTr, static_cast<double>(stages));
+                    mTn = std::pow(mTn, static_cast<double>(stages));
+                }
+                magTeeth *= mTr;
+                magTail  *= mTn;
             }
 
             const float yTeeth = gainToY(static_cast<float>(juce::Decibels::gainToDecibels(magTeeth, -48.0)), plot);
@@ -331,10 +367,17 @@ private:
             const float y = gainToY(gVal, plot);
 
             const bool isSel = (i == selectedBand);
+            const bool isSolo = (processor.soloBandIndex.load(std::memory_order_relaxed) == i);
             const bool hasSat = (bp.teethSatType != SatType::Off && bp.teethSatDrive > 0.01f)
                              || (bp.tailSatType != SatType::Off && bp.tailSatDrive > 0.01f);
 
             const float r = isSel ? 11.0f : 8.5f;
+
+            if (isSolo)
+            {
+                g.setColour(Palette::textPrimary.withAlpha(0.35f));
+                g.drawEllipse(x - r - 5.0f, y - r - 5.0f, (r + 5.0f) * 2.0f, (r + 5.0f) * 2.0f, 1.8f);
+            }
 
             if (hasSat && bp.enabled)
             {

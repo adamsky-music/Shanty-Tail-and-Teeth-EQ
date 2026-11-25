@@ -37,6 +37,7 @@ ShantyTailAndTeethEQProcessor::ShantyTailAndTeethEQProcessor()
     midSidePtr     = apvts.getRawParameterValue("midSideMode");
     mixPtr         = apvts.getRawParameterValue("mix");
     outputGainPtr  = apvts.getRawParameterValue("outputGain");
+    autoGainPtr    = apvts.getRawParameterValue("autoGain");
     bypassPtr      = apvts.getRawParameterValue("bypass");
 
     for (int i = 0; i < ShantyEQ::numBands; ++i)
@@ -44,6 +45,7 @@ ShantyTailAndTeethEQProcessor::ShantyTailAndTeethEQProcessor()
         auto& bp = bandPtrs[static_cast<size_t>(i)];
         bp.enabled       = apvts.getRawParameterValue(bandParamID(i, "enabled"));
         bp.type          = apvts.getRawParameterValue(bandParamID(i, "type"));
+        bp.slope         = apvts.getRawParameterValue(bandParamID(i, "slope"));
         bp.freq          = apvts.getRawParameterValue(bandParamID(i, "freq"));
         bp.q             = apvts.getRawParameterValue(bandParamID(i, "q"));
         bp.teethGain     = apvts.getRawParameterValue(bandParamID(i, "teethGain"));
@@ -106,10 +108,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout ShantyTailAndTeethEQProcesso
         juce::NormalisableRange<float>(-24.0f, 24.0f, 0.1f), 0.0f,
         juce::AudioParameterFloatAttributes().withLabel("dB")));
 
+    params.push_back(std::make_unique<juce::AudioParameterBool>("autoGain", "Auto Gain", false));
     params.push_back(std::make_unique<juce::AudioParameterBool>("bypass", "Bypass", false));
 
     // 8 Parametric Bands
     const juce::StringArray filterTypes { "Low Cut", "Low Shelf", "Bell", "Notch", "High Shelf", "High Cut" };
+    const juce::StringArray slopeTypes  { "12 dB", "24 dB", "48 dB" };
     const juce::StringArray satTypes    { "Off", "Tape", "Tube", "Soft Clip", "Hard Clip" };
 
     for (int i = 0; i < ShantyEQ::numBands; ++i)
@@ -121,6 +125,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout ShantyTailAndTeethEQProcesso
 
         params.push_back(std::make_unique<juce::AudioParameterChoice>(
             bandParamID(i, "type"), prefix + "Type", filterTypes, defaultBandTypes[i]));
+
+        params.push_back(std::make_unique<juce::AudioParameterChoice>(
+            bandParamID(i, "slope"), prefix + "Slope", slopeTypes, 0));
 
         juce::NormalisableRange<float> freqRange(20.0f, 20000.0f, 0.1f);
         freqRange.setSkewForCentre(1000.0f);
@@ -184,6 +191,8 @@ ShantyEQ::BandParams ShantyTailAndTeethEQProcessor::getBandParams(int bandIndex)
     const auto& bp = bandPtrs[static_cast<size_t>(bandIndex)];
     p.enabled       = bp.enabled->load(std::memory_order_relaxed) > 0.5f;
     p.type          = static_cast<ShantyEQ::FilterType>(static_cast<int>(bp.type->load(std::memory_order_relaxed)));
+    const int slopeIdx = static_cast<int>(bp.slope->load(std::memory_order_relaxed));
+    p.slopeStages   = (slopeIdx == 2) ? 4 : (slopeIdx == 1 ? 2 : 1);
     p.freq          = bp.freq->load(std::memory_order_relaxed);
     p.q             = bp.q->load(std::memory_order_relaxed);
     p.teethGainDb   = bp.teethGain->load(std::memory_order_relaxed);
@@ -299,6 +308,8 @@ void ShantyTailAndTeethEQProcessor::processBlock(juce::AudioBuffer<float>& buffe
     const bool soloTail      = tailSoloPtr->load(std::memory_order_relaxed) > 0.5f;
     const float mixNorm      = mixPtr->load(std::memory_order_relaxed) * 0.01f;
     const float outGain      = juce::Decibels::decibelsToGain(outputGainPtr->load(std::memory_order_relaxed));
+    const bool  autoGainOn   = autoGainPtr->load(std::memory_order_relaxed) > 0.5f;
+    const int   soloBand     = soloBandIndex.load(std::memory_order_relaxed);
 
     float teethMute = 1.0f;
     float tailMute  = 1.0f;
@@ -311,6 +322,8 @@ void ShantyTailAndTeethEQProcessor::processBlock(juce::AudioBuffer<float>& buffe
     float peakTail  = 0.0f;
 
     constexpr float invSqrt2 = 0.7071067811865475f;
+    const float rmsAlpha = 0.9992f;
+    const float gainSmooth = 0.996f;
 
     for (int n = 0; n < numSamples; ++n)
     {
@@ -375,6 +388,12 @@ void ShantyTailAndTeethEQProcessor::processBlock(juce::AudioBuffer<float>& buffe
             tnR = rTn;
         }
 
+        if (soloBand >= 0 && soloBand < ShantyEQ::numBands)
+        {
+            teethBands[static_cast<size_t>(soloBand)].processSoloExtract(trL, trR);
+            tailBands[static_cast<size_t>(soloBand)].processSoloExtract(tnL, tnR);
+        }
+
         trL *= teethBusGain * teethMute;
         trR *= teethBusGain * teethMute;
         tnL *= tailBusGain * tailMute;
@@ -383,8 +402,30 @@ void ShantyTailAndTeethEQProcessor::processBlock(juce::AudioBuffer<float>& buffe
         peakTeeth = juce::jmax(peakTeeth, juce::jmax(std::abs(trL), std::abs(trR)));
         peakTail  = juce::jmax(peakTail,  juce::jmax(std::abs(tnL), std::abs(tnR)));
 
-        const float wetL = (trL + tnL) * outGain;
-        const float wetR = (trR + tnR) * outGain;
+        float wetL = trL + tnL;
+        float wetR = trR + tnR;
+
+        if (autoGainOn && soloBand < 0)
+        {
+            const float dryEnergy = 0.5f * (delayedDryL * delayedDryL + delayedDryR * delayedDryR);
+            const float wetEnergy = 0.5f * (wetL * wetL + wetR * wetR);
+            autoGainInSq  = rmsAlpha * autoGainInSq  + (1.0f - rmsAlpha) * dryEnergy;
+            autoGainWetSq = rmsAlpha * autoGainWetSq + (1.0f - rmsAlpha) * wetEnergy;
+
+            const float targetGain = (autoGainWetSq > 1.0e-7f && autoGainInSq > 1.0e-7f)
+                ? juce::jlimit(0.25f, 4.0f, std::sqrt(autoGainInSq / autoGainWetSq))
+                : 1.0f;
+            autoGainCur = gainSmooth * autoGainCur + (1.0f - gainSmooth) * targetGain;
+            wetL *= autoGainCur;
+            wetR *= autoGainCur;
+        }
+        else
+        {
+            autoGainCur = gainSmooth * autoGainCur + (1.0f - gainSmooth) * 1.0f;
+        }
+
+        wetL *= outGain;
+        wetR *= outGain;
 
         mainL[n] = delayedDryL * (1.0f - mixNorm) + wetL * mixNorm;
         if (mainR != nullptr)
@@ -397,6 +438,160 @@ void ShantyTailAndTeethEQProcessor::processBlock(juce::AudioBuffer<float>& buffe
     tailMeter.store(0.65f * prevTn  + 0.35f * juce::jlimit(0.0f, 1.0f, peakTail), std::memory_order_relaxed);
     teethSatMeter.store(juce::jlimit(0.0f, 1.0f, peakTeeth * maxTeethDrive), std::memory_order_relaxed);
     tailSatMeter.store(juce::jlimit(0.0f, 1.0f, peakTail * maxTailDrive), std::memory_order_relaxed);
+}
+
+void ShantyTailAndTeethEQProcessor::resetBand(int bandIndex)
+{
+    if (bandIndex < 0 || bandIndex >= ShantyEQ::numBands)
+        return;
+
+    auto setParam = [this](const juce::String& id, float rawVal)
+    {
+        if (auto* p = apvts.getParameter(id))
+            p->setValueNotifyingHost(p->convertTo0to1(rawVal));
+    };
+
+    setParam(bandParamID(bandIndex, "enabled"), 1.0f);
+    setParam(bandParamID(bandIndex, "type"), static_cast<float>(defaultBandTypes[bandIndex]));
+    setParam(bandParamID(bandIndex, "slope"), 0.0f);
+    setParam(bandParamID(bandIndex, "freq"), defaultBandFreqs[bandIndex]);
+    setParam(bandParamID(bandIndex, "q"), 1.0f);
+    setParam(bandParamID(bandIndex, "teethGain"), 0.0f);
+    setParam(bandParamID(bandIndex, "teethPan"), 0.0f);
+    setParam(bandParamID(bandIndex, "teethSatType"), 0.0f);
+    setParam(bandParamID(bandIndex, "teethSatDrive"), 0.0f);
+    setParam(bandParamID(bandIndex, "tailGain"), 0.0f);
+    setParam(bandParamID(bandIndex, "tailPan"), 0.0f);
+    setParam(bandParamID(bandIndex, "tailSatType"), 0.0f);
+    setParam(bandParamID(bandIndex, "tailSatDrive"), 0.0f);
+}
+
+juce::StringArray ShantyTailAndTeethEQProcessor::getPresetNames()
+{
+    return {
+        "Init (Neutral)",
+        "Snare Crack & Body",
+        "Kick Punch & Sub",
+        "Vocal De-Ess & Air",
+        "Bass Bite & Weight",
+        "Acoustic Guitar Sparkle",
+        "Mix Bus Glue"
+    };
+}
+
+void ShantyTailAndTeethEQProcessor::applyPreset(int presetIndex)
+{
+    auto setParam = [this](const juce::String& id, float rawVal)
+    {
+        if (auto* p = apvts.getParameter(id))
+            p->setValueNotifyingHost(p->convertTo0to1(rawVal));
+    };
+
+    for (int i = 0; i < ShantyEQ::numBands; ++i)
+        resetBand(i);
+
+    setParam("splitSource", 0.0f);
+    setParam("splitSeparation", 50.0f);
+    setParam("splitSmoothness", 35.0f);
+    setParam("splitDecay", 30.0f);
+    setParam("teethLevel", 0.0f);
+    setParam("tailLevel", 0.0f);
+    setParam("mix", 100.0f);
+    setParam("outputGain", 0.0f);
+
+    switch (presetIndex)
+    {
+        case 1: // Snare Crack & Body
+            setParam("splitSource", 1.0f); // Drums
+            setParam("splitSeparation", 58.0f);
+            setParam(bandParamID(0, "type"), 0.0f); // Low Cut
+            setParam(bandParamID(0, "slope"), 1.0f); // 24 dB
+            setParam(bandParamID(0, "freq"), 65.0f);
+            setParam(bandParamID(2, "freq"), 210.0f);
+            setParam(bandParamID(2, "tailGain"), 3.0f);
+            setParam(bandParamID(2, "tailSatType"), 1.0f); // Tape
+            setParam(bandParamID(2, "tailSatDrive"), 25.0f);
+            setParam(bandParamID(4, "freq"), 2400.0f);
+            setParam(bandParamID(4, "teethGain"), 4.5f);
+            setParam(bandParamID(4, "teethSatType"), 1.0f); // Tape
+            setParam(bandParamID(4, "teethSatDrive"), 40.0f);
+            setParam(bandParamID(6, "freq"), 7500.0f);
+            setParam(bandParamID(6, "teethGain"), 3.0f);
+            break;
+
+        case 2: // Kick Punch & Sub
+            setParam("splitSource", 1.0f);
+            setParam("splitSeparation", 55.0f);
+            setParam(bandParamID(1, "freq"), 60.0f);
+            setParam(bandParamID(1, "tailGain"), 3.5f);
+            setParam(bandParamID(1, "teethGain"), 2.0f);
+            setParam(bandParamID(2, "freq"), 280.0f);
+            setParam(bandParamID(2, "q"), 1.8f);
+            setParam(bandParamID(2, "tailGain"), -4.0f);
+            setParam(bandParamID(5, "freq"), 3200.0f);
+            setParam(bandParamID(5, "teethGain"), 4.5f);
+            setParam(bandParamID(5, "teethSatType"), 4.0f); // Hard Clip
+            setParam(bandParamID(5, "teethSatDrive"), 35.0f);
+            break;
+
+        case 3: // Vocal De-Ess & Air
+            setParam("splitSource", 3.0f); // Vocal
+            setParam("splitSeparation", 60.0f);
+            setParam(bandParamID(0, "type"), 0.0f); // Low Cut
+            setParam(bandParamID(0, "slope"), 1.0f);
+            setParam(bandParamID(0, "freq"), 85.0f);
+            setParam(bandParamID(2, "freq"), 240.0f);
+            setParam(bandParamID(2, "tailGain"), 2.0f);
+            setParam(bandParamID(2, "tailSatType"), 2.0f); // Tube
+            setParam(bandParamID(2, "tailSatDrive"), 22.0f);
+            setParam(bandParamID(6, "freq"), 6800.0f);
+            setParam(bandParamID(6, "q"), 2.2f);
+            setParam(bandParamID(6, "teethGain"), -6.5f);
+            setParam(bandParamID(7, "freq"), 11500.0f);
+            setParam(bandParamID(7, "tailGain"), 3.5f);
+            break;
+
+        case 4: // Bass Bite & Weight
+            setParam("splitSource", 2.0f); // Bass
+            setParam("splitSeparation", 52.0f);
+            setParam(bandParamID(1, "freq"), 72.0f);
+            setParam(bandParamID(1, "tailGain"), 3.0f);
+            setParam(bandParamID(4, "freq"), 950.0f);
+            setParam(bandParamID(4, "teethGain"), 3.5f);
+            setParam(bandParamID(4, "teethSatType"), 2.0f); // Tube
+            setParam(bandParamID(4, "teethSatDrive"), 48.0f);
+            break;
+
+        case 5: // Acoustic Guitar Sparkle
+            setParam("splitSource", 4.0f); // Guitar
+            setParam("splitSeparation", 55.0f);
+            setParam(bandParamID(0, "type"), 0.0f);
+            setParam(bandParamID(0, "freq"), 75.0f);
+            setParam(bandParamID(2, "freq"), 185.0f);
+            setParam(bandParamID(2, "tailGain"), -3.0f);
+            setParam(bandParamID(5, "freq"), 4200.0f);
+            setParam(bandParamID(5, "teethGain"), 3.5f);
+            setParam(bandParamID(7, "freq"), 10000.0f);
+            setParam(bandParamID(7, "tailGain"), 2.5f);
+            break;
+
+        case 6: // Mix Bus Glue
+            setParam("splitSource", 6.0f); // Mix
+            setParam("splitSeparation", 45.0f);
+            setParam(bandParamID(1, "freq"), 95.0f);
+            setParam(bandParamID(1, "tailGain"), 1.2f);
+            setParam(bandParamID(1, "tailSatType"), 1.0f); // Tape
+            setParam(bandParamID(1, "tailSatDrive"), 18.0f);
+            setParam(bandParamID(5, "freq"), 4800.0f);
+            setParam(bandParamID(5, "teethGain"), 1.5f);
+            setParam(bandParamID(7, "freq"), 12000.0f);
+            setParam(bandParamID(7, "tailGain"), 1.5f);
+            break;
+
+        case 0:
+        default:
+            break;
+    }
 }
 
 juce::AudioProcessorEditor* ShantyTailAndTeethEQProcessor::createEditor()

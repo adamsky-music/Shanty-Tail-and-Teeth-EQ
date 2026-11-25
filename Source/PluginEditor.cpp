@@ -46,6 +46,33 @@ ShantyTailAndTeethEQEditor::ShantyTailAndTeethEQEditor(ShantyTailAndTeethEQProce
     addAndMakeVisible(mascot);
 
     spectrum.onBandSelected = [this](int idx) { selectBand(idx); };
+    spectrum.onBandSoloChanged = [this]() { updateBandSoloUI(); };
+
+    // Presets & A/B
+    presetCombo.addItemList(ShantyTailAndTeethEQProcessor::getPresetNames(), 1);
+    presetCombo.setTextWhenNothingSelected("PRESETS");
+    presetCombo.onChange = [this]()
+    {
+        const int idx = presetCombo.getSelectedItemIndex();
+        if (idx >= 0)
+            processor.applyPreset(idx);
+    };
+    addAndMakeVisible(presetCombo);
+
+    auto setupABBtn = [this](juce::TextButton& btn, bool targetB)
+    {
+        btn.setRadioGroupId(303);
+        btn.setClickingTogglesState(true);
+        btn.setColour(juce::TextButton::buttonOnColourId, ShantyEQ::Palette::tailCyan.withAlpha(0.35f));
+        btn.setColour(juce::TextButton::textColourOnId, ShantyEQ::Palette::textPrimary);
+        btn.onClick = [this, targetB]() { switchAB(targetB); };
+        addAndMakeVisible(btn);
+    };
+    setupABBtn(abBtnA, false);
+    setupABBtn(abBtnB, true);
+    abBtnA.setToggleState(true, juce::dontSendNotification);
+    stateSlotA = processor.apvts.copyState();
+    stateSlotB = processor.apvts.copyState();
 
     // Top Split Engine
     sourceCombo.addItemList({ "Default", "Drums", "Bass", "Vocal", "Guitar", "Keys", "Mix" }, 1);
@@ -102,6 +129,9 @@ ShantyTailAndTeethEQEditor::ShantyTailAndTeethEQEditor(ShantyTailAndTeethEQProce
     setupKnob(mixSlider,        mixLabel,        "MIX",       "neutral");
     setupKnob(outputSlider,     outputLabel,     "OUTPUT",    "neutral", true);
 
+    setupToggleBtn(autoGainBtn, ShantyEQ::Palette::satAmber);
+    autoGainBtn.setTooltip("Auto-Gain loudness compensation");
+
     // Band Selector Buttons
     for (int i = 0; i < ShantyEQ::numBands; ++i)
     {
@@ -117,9 +147,36 @@ ShantyTailAndTeethEQEditor::ShantyTailAndTeethEQEditor(ShantyTailAndTeethEQProce
     bandEnabledBtn.setColour(juce::ToggleButton::textColourId, ShantyEQ::Palette::textPrimary);
     addAndMakeVisible(bandEnabledBtn);
 
+    bandSoloBtn.setClickingTogglesState(true);
+    bandSoloBtn.setColour(juce::TextButton::buttonOnColourId, ShantyEQ::Palette::satAmber.withAlpha(0.35f));
+    bandSoloBtn.setColour(juce::TextButton::textColourOnId, ShantyEQ::Palette::textPrimary);
+    bandSoloBtn.onClick = [this]()
+    {
+        const bool on = bandSoloBtn.getToggleState();
+        processor.soloBandIndex.store(on ? currentBand : -1, std::memory_order_relaxed);
+        spectrum.repaint();
+    };
+    addAndMakeVisible(bandSoloBtn);
+
+    bandResetBtn.setColour(juce::TextButton::buttonColourId, ShantyEQ::Palette::bgCanvas);
+    bandResetBtn.setColour(juce::TextButton::textColourOffId, ShantyEQ::Palette::textSecondary);
+    bandResetBtn.onClick = [this]() { processor.resetBand(currentBand); };
+    addAndMakeVisible(bandResetBtn);
+
     bandTypeCombo.addItemList({ "Low Cut", "Low Shelf", "Bell", "Notch", "High Shelf", "High Cut" }, 1);
+    bandTypeCombo.onChange = [this]()
+    {
+        const int idx = bandTypeCombo.getSelectedItemIndex();
+        const bool isCut = (idx == 0 || idx == 5);
+        bandSlopeCombo.setEnabled(isCut);
+        bandSlopeCombo.setAlpha(isCut ? 1.0f : 0.4f);
+    };
     addAndMakeVisible(bandTypeCombo);
-    bandTypeLabel.setText("TYPE", juce::dontSendNotification);
+
+    bandSlopeCombo.addItemList({ "12 dB", "24 dB", "48 dB" }, 1);
+    addAndMakeVisible(bandSlopeCombo);
+
+    bandTypeLabel.setText("TYPE / SLOPE", juce::dontSendNotification);
     bandTypeLabel.setFont(10.5f);
     bandTypeLabel.setColour(juce::Label::textColourId, ShantyEQ::Palette::textSecondary);
     addAndMakeVisible(bandTypeLabel);
@@ -166,6 +223,7 @@ ShantyTailAndTeethEQEditor::ShantyTailAndTeethEQEditor(ShantyTailAndTeethEQProce
     tailLevelAtt  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.apvts, "tailLevel", tailLevelSlider);
     mixAtt        = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.apvts, "mix", mixSlider);
     outputAtt     = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.apvts, "outputGain", outputSlider);
+    autoGainAtt   = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.apvts, "autoGain", autoGainBtn);
 
     selectBand(0);
     addChildComponent(manualOverlay);
@@ -195,15 +253,39 @@ void ShantyTailAndTeethEQEditor::setupKnob(juce::Slider& s, juce::Label& l, cons
     addAndMakeVisible(l);
 }
 
+void ShantyTailAndTeethEQEditor::switchAB(bool useB)
+{
+    if (useB == isSlotB)
+        return;
+
+    if (isSlotB)
+        stateSlotB = processor.apvts.copyState();
+    else
+        stateSlotA = processor.apvts.copyState();
+
+    isSlotB = useB;
+    const auto& nextState = isSlotB ? stateSlotB : stateSlotA;
+    if (nextState.isValid())
+        processor.apvts.replaceState(nextState);
+}
+
+void ShantyTailAndTeethEQEditor::updateBandSoloUI()
+{
+    const int solo = processor.soloBandIndex.load(std::memory_order_relaxed);
+    bandSoloBtn.setToggleState(solo == currentBand, juce::dontSendNotification);
+}
+
 void ShantyTailAndTeethEQEditor::selectBand(int bandIndex)
 {
     currentBand = juce::jlimit(0, ShantyEQ::numBands - 1, bandIndex);
     bandButtons[static_cast<size_t>(currentBand)].setToggleState(true, juce::dontSendNotification);
     spectrum.setSelectedBand(currentBand);
+    updateBandSoloUI();
 
     // Reset attachments before rebinding
     bandEnabledAtt.reset();
     bandTypeAtt.reset();
+    bandSlopeAtt.reset();
     bandFreqAtt.reset();
     bandQAtt.reset();
     teethGainAtt.reset();
@@ -219,8 +301,14 @@ void ShantyTailAndTeethEQEditor::selectBand(int bandIndex)
 
     bandEnabledAtt   = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(processor.apvts, id("enabled"), bandEnabledBtn);
     bandTypeAtt      = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.apvts, id("type"), bandTypeCombo);
+    bandSlopeAtt     = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(processor.apvts, id("slope"), bandSlopeCombo);
     bandFreqAtt      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.apvts, id("freq"), bandFreqSlider);
     bandQAtt         = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.apvts, id("q"), bandQSlider);
+
+    const int typeIdx = bandTypeCombo.getSelectedItemIndex();
+    const bool isCut = (typeIdx == 0 || typeIdx == 5);
+    bandSlopeCombo.setEnabled(isCut);
+    bandSlopeCombo.setAlpha(isCut ? 1.0f : 0.4f);
 
     teethGainAtt     = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.apvts, id("teethGain"), teethGainSlider);
     teethPanAtt      = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.apvts, id("teethPan"), teethPanSlider);
@@ -294,9 +382,9 @@ void ShantyTailAndTeethEQEditor::paint(juce::Graphics& g)
     const float cardY = bottomY + 40.0f;
     const float cardH = 150.0f;
     const float totalCardsW = static_cast<float>(getWidth() - 48 - 24);
-    const float card1W = totalCardsW * 0.26f;
-    const float card2W = totalCardsW * 0.37f;
-    const float card3W = totalCardsW * 0.37f;
+    const float card1W = totalCardsW * 0.28f;
+    const float card2W = totalCardsW * 0.36f;
+    const float card3W = totalCardsW * 0.36f;
     const float c1X = 24.0f;
     const float c2X = c1X + card1W + 12.0f;
     const float c3X = c2X + card2W + 12.0f;
@@ -325,20 +413,26 @@ void ShantyTailAndTeethEQEditor::resized()
     const int midH = juce::jmax(220, getHeight() - 304);
     const int bottomY = 80 + midH + 10;
 
-    // Header Split Engine controls
+    // Header Split Engine, Presets & A/B
     const int headerRightX = w - 376;
-    sourceLabel.setBounds(juce::jmin(375, headerRightX - 330), 14, 96, 14);
-    sourceCombo.setBounds(juce::jmin(375, headerRightX - 330), 31, 96, 26);
+    const int splitX = juce::jmax(348, headerRightX - 310);
+    sourceLabel.setBounds(splitX, 14, 86, 14);
+    sourceCombo.setBounds(splitX, 31, 86, 26);
 
     auto placeTopKnob = [](juce::Slider& s, juce::Label& l, int x)
     {
-        l.setBounds(x, 11, 64, 13);
-        s.setBounds(x, 22, 64, 46);
+        l.setBounds(x, 11, 60, 13);
+        s.setBounds(x, 22, 60, 46);
     };
-    const int knobStartX = sourceCombo.getRight() + 10;
+    const int knobStartX = sourceCombo.getRight() + 6;
     placeTopKnob(sepSlider, sepLabel, knobStartX);
-    placeTopKnob(smoothSlider, smoothLabel, knobStartX + 68);
-    placeTopKnob(decaySlider, decayLabel, knobStartX + 136);
+    placeTopKnob(smoothSlider, smoothLabel, knobStartX + 62);
+    placeTopKnob(decaySlider, decayLabel, knobStartX + 124);
+
+    // Floating Presets + A/B in top-right of Spectrum area (clean & zero header crowding)
+    presetCombo.setBounds(w - 472, 90, 148, 22);
+    abBtnA.setBounds(w - 318, 90, 24, 22);
+    abBtnB.setBounds(w - 292, 90, 24, 22);
 
     // Header right buttons (anchored to right edge)
     manualBtn.setBounds(w - 54, 24, 34, 30);
@@ -370,6 +464,7 @@ void ShantyTailAndTeethEQEditor::resized()
     placeGlobalKnob(tailLevelSlider,  tailLevelLabel,  rightX + 126, globalY);
     placeGlobalKnob(mixSlider,        mixLabel,        rightX + 14,  globalY + 78);
     placeGlobalKnob(outputSlider,     outputLabel,     rightX + 126, globalY + 78);
+    autoGainBtn.setBounds(rightX + 194, globalY + 76, 40, 18);
 
     // Bottom Inspector: Band Buttons
     const int btnW = (w - 48 - 7 * 6) / ShantyEQ::numBands;
@@ -379,17 +474,21 @@ void ShantyTailAndTeethEQEditor::resized()
     // Bottom Inspector Cards (proportional)
     const int cardY = bottomY + 40;
     const int totalCardsW = w - 48 - 24;
-    const int card1W = static_cast<int>(totalCardsW * 0.26f);
-    const int card2W = static_cast<int>(totalCardsW * 0.37f);
-    const int card3W = static_cast<int>(totalCardsW * 0.37f);
+    const int card1W = static_cast<int>(totalCardsW * 0.28f);
+    const int card2W = static_cast<int>(totalCardsW * 0.36f);
+    const int card3W = static_cast<int>(totalCardsW * 0.36f);
     const int c1X = 24;
     const int c2X = c1X + card1W + 12;
     const int c3X = c2X + card2W + 12;
 
     // Card 1: Band Shape
-    bandEnabledBtn.setBounds(c1X + card1W - 86, cardY + 4, 80, 22);
-    bandTypeLabel.setBounds(c1X + 10, cardY + 32, 86, 14);
-    bandTypeCombo.setBounds(c1X + 10, cardY + 50, juce::jmax(76, card1W / 3), 26);
+    bandResetBtn.setBounds(c1X + card1W - 38, cardY + 5, 32, 20);
+    bandSoloBtn.setBounds(c1X + card1W - 82, cardY + 5, 40, 20);
+    bandEnabledBtn.setBounds(c1X + card1W - 148, cardY + 4, 62, 22);
+    bandTypeLabel.setBounds(c1X + 10, cardY + 32, 96, 14);
+    const int typeW = juce::jmax(76, card1W / 3);
+    bandTypeCombo.setBounds(c1X + 10, cardY + 50, typeW, 24);
+    bandSlopeCombo.setBounds(c1X + 10, cardY + 80, typeW, 24);
 
     const int c1KnobW = juce::jmin(72, (card1W - 110) / 2);
     bandFreqLabel.setBounds(c1X + card1W - c1KnobW * 2 - 14, cardY + 28, c1KnobW, 14);
